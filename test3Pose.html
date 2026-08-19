@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <title>Teachable Machine Pose Classifier - 3 Classes</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      padding: 20px;
+      transition: 0.3s;
+    }
+
+    button {
+      font-size: 18px;
+      padding: 10px 20px;
+      cursor: pointer;
+      margin-bottom: 15px;
+    }
+
+    canvas {
+      border: 2px solid #333;
+      border-radius: 10px;
+      margin-top: 10px;
+    }
+
+    .box {
+      max-width: 420px;
+      margin: 15px auto;
+      padding: 15px;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+    }
+
+    .score {
+      font-size: 18px;
+      margin: 8px 0;
+    }
+
+    #result {
+      font-size: 26px;
+      font-weight: bold;
+    }
+
+    #confidence {
+      font-size: 20px;
+    }
+
+    #action {
+      font-size: 22px;
+      font-weight: bold;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>Teachable Machine Pose Classifier</h2>
+  <h3>แบบ 3 Class</h3>
+
+  <button id="startBtn" type="button" onclick="init()">เริ่มใช้งานกล้อง</button>
+
+  <div class="box">
+    <div id="result">ผลลัพธ์: -</div>
+    <div id="confidence">ความมั่นใจ: -</div>
+    <div id="action">สถานะ: ยังไม่เริ่ม</div>
+  </div>
+
+  <canvas id="canvas" width="400" height="400"></canvas>
+
+  <div class="box">
+    <h3>คะแนนแต่ละ Class</h3>
+    <div id="class1" class="score">Class 1: -</div>
+    <div id="class2" class="score">Class 2: -</div>
+    <div id="class3" class="score">Class 3: -</div>
+  </div>
+
+  <!-- TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+
+  <!-- Teachable Machine Pose Library -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8.3/dist/teachablemachine-pose.min.js"></script>
+
+  <script>
+    // ========================================
+    // 1) ใส่ลิงก์โมเดลจาก Teachable Machine ตรงนี้
+    // ========================================
+    const MODEL_URL = "https://teachablemachine.withgoogle.com/models/Your model/";
+
+    // ค่าความมั่นใจขั้นต่ำก่อนให้ระบบถือว่า "ใช่"
+    const CONFIDENCE_LIMIT = 0.80;
+
+    let model;
+    let webcam;
+    let ctx;
+    let maxPredictions;
+    let isRunning = false;
+
+    async function init() {
+      const startBtn = document.getElementById("startBtn");
+      const actionText = document.getElementById("action");
+
+      try {
+        startBtn.disabled = true;
+        startBtn.innerHTML = "กำลังโหลด...";
+        actionText.innerHTML = "สถานะ: กำลังโหลดโมเดล";
+
+        const modelURL = MODEL_URL + "model.json";
+        const metadataURL = MODEL_URL + "metadata.json";
+
+        // โหลดโมเดล Pose จาก Teachable Machine
+        model = await tmPose.load(modelURL, metadataURL);
+        maxPredictions = model.getTotalClasses();
+
+        if (maxPredictions !== 3) {
+          actionText.innerHTML = "คำเตือน: โมเดลนี้ไม่ได้มี 3 Class";
+        }
+
+        // ตั้งค่ากล้อง
+        const size = 400;
+        const flip = true;
+        webcam = new tmPose.Webcam(size, size, flip);
+
+        await webcam.setup();
+        await webcam.play();
+
+        const canvas = document.getElementById("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        ctx = canvas.getContext("2d");
+
+        isRunning = true;
+        startBtn.innerHTML = "กำลังใช้งาน";
+        actionText.innerHTML = "สถานะ: เริ่มตรวจจับท่าทางแล้ว";
+
+        window.requestAnimationFrame(loop);
+      } catch (error) {
+        console.error(error);
+        startBtn.disabled = false;
+        startBtn.innerHTML = "เริ่มใช้งานกล้อง";
+        actionText.innerHTML = "เกิดข้อผิดพลาด: เปิดกล้องหรือโหลดโมเดลไม่ได้";
+      }
+    }
+
+    async function loop() {
+      if (!isRunning) return;
+
+      webcam.update();
+      await predict();
+
+      window.requestAnimationFrame(loop);
+    }
+
+    async function predict() {
+      // ตรวจจับโครงร่างร่างกาย
+      const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+
+      // ส่งข้อมูล pose เข้าโมเดลเพื่อทำนาย class
+      const prediction = await model.predict(posenetOutput);
+
+      const class1Name = prediction[0].className;
+      const class1Score = prediction[0].probability;
+
+      const class2Name = prediction[1].className;
+      const class2Score = prediction[1].probability;
+
+      const class3Name = prediction[2].className;
+      const class3Score = prediction[2].probability;
+
+      document.getElementById("class1").innerHTML =
+        class1Name + ": " + (class1Score * 100).toFixed(2) + "%";
+
+      document.getElementById("class2").innerHTML =
+        class2Name + ": " + (class2Score * 100).toFixed(2) + "%";
+
+      document.getElementById("class3").innerHTML =
+        class3Name + ": " + (class3Score * 100).toFixed(2) + "%";
+
+      let resultName;
+      let resultScore;
+      let resultIndex;
+
+      // หา Class ที่มีคะแนนสูงสุด
+      if (class1Score >= class2Score && class1Score >= class3Score) {
+        resultName = class1Name;
+        resultScore = class1Score;
+        resultIndex = 1;
+      } else if (class2Score >= class1Score && class2Score >= class3Score) {
+        resultName = class2Name;
+        resultScore = class2Score;
+        resultIndex = 2;
+      } else {
+        resultName = class3Name;
+        resultScore = class3Score;
+        resultIndex = 3;
+      }
+
+      document.getElementById("result").innerHTML =
+        "ผลลัพธ์: " + resultName;
+
+      document.getElementById("confidence").innerHTML =
+        "ความมั่นใจ: " + (resultScore * 100).toFixed(2) + "%";
+
+      // ========================================
+      // 2) ส่วนสั่งงานตามผลลัพธ์
+      
+      // ========================================
+
+      if (resultScore < CONFIDENCE_LIMIT) {
+        document.getElementById("action").innerHTML =
+          "สถานะ: ยังไม่มั่นใจพอ";
+        document.body.style.backgroundColor = "white";
+      } 
+      else if (resultIndex === 1) {
+        // เมื่อเป็น Class 1
+        document.getElementById("action").innerHTML =
+          "สถานะ: ตรวจพบ " + class1Name;
+
+        document.body.style.backgroundColor = "#e8ffe8";
+      } 
+      else if (resultIndex === 2) {
+        // เมื่อเป็น Class 2
+        document.getElementById("action").innerHTML =
+          "สถานะ: ตรวจพบ " + class2Name;
+
+        document.body.style.backgroundColor = "#e8f0ff";
+      }
+      else if (resultIndex === 3) {
+        // เมื่อเป็น Class 3
+        document.getElementById("action").innerHTML =
+          "สถานะ: ตรวจพบ " + class3Name;
+
+        document.body.style.backgroundColor = "#fff3e8";
+      }
+
+      drawPose(pose);
+    }
+
+    function drawPose(pose) {
+      // วาดภาพจากกล้องลง canvas
+      ctx.drawImage(webcam.canvas, 0, 0);
+
+      // วาดจุด keypoints และเส้น skeleton
+      if (pose) {
+        const minPartConfidence = 0.5;
+        tmPose.drawKeypoints(pose.keypoints, minPartConfidence, ctx);
+        tmPose.drawSkeleton(pose.keypoints, minPartConfidence, ctx);
+      }
+    }
+  </script>
+</body>
+</html>
