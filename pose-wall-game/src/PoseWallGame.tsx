@@ -14,7 +14,7 @@ declare global {
 }
 
 type PoseKey = 'Two hand' | 'one side' | 'one leg up' | 'tree';
-type GamePhase = 'idle' | 'loading' | 'ready' | 'playing' | 'gameover';
+// type GamePhase = 'idle' | 'loading' | 'ready' | 'playing' | 'gameover';
 
 interface PoseInfo {
   key: PoseKey;
@@ -256,12 +256,11 @@ export default function PoseMiiPlus() {
   const [detectedPose, setDetectedPose] = useState<PoseKey | 'unknown'>('unknown');
   const [targetPose, setTargetPose] = useState<PoseKey | null>(null);
   const [message, setMessage] = useState('กด "เริ่มเกม" เพื่อเล่น');
-  const [modelClasses, setModelClasses] = useState<string[]>([]);
   const [flash, setFlash] = useState(false);
   const [lastPoints, setLastPoints] = useState<number | null>(null);
   const [walls, setWalls] = useState<Wall[]>([]);
   const [classScores, setClassScores] = useState<Record<string, number>>({});
-  const [particleTick, setParticleTick] = useState(0);
+  const [, setParticleTick] = useState(0);
   const [showStartScreen, setShowStartScreen] = useState(true);
 
   const targetInfo = targetPose ? POSES[targetPose] : null;
@@ -318,7 +317,6 @@ export default function PoseMiiPlus() {
     Object.entries(map).forEach(([l, k]) => { reverse[k] = l; });
     poseToLabelRef.current = reverse;
 
-    setModelClasses(labels);
     setReady(true);
     setLoading(false);
     setMessage('พร้อม! กดเริ่มเกม');
