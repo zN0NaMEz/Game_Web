@@ -11,6 +11,7 @@ import {
   randomPose,
 } from './poseData';
 import type { PoseKey } from './poseData';
+import { MagicCircle, MagicVisualStyles } from './magicVisuals';
 
 // ============================================
 // TYPES
@@ -511,6 +512,7 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
 
   return (
     <div className={`pose-game ${flash ? 'pose-game--flash' : ''}`}>
+      <MagicVisualStyles />
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
         .pose-game, .pose-game * { box-sizing: border-box; }
@@ -725,7 +727,8 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
 
         /* START SCREEN */
         .start-screen { position: absolute; inset: 0; z-index: 500; display: grid; place-items: center; background: rgba(5,7,13,0.7); backdrop-filter: blur(20px); }
-        .start-card { text-align: center; width: min(480px, 90%); padding: 40px 32px; border-radius: 32px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); }
+        .start-card { position: relative; z-index: 1; text-align: center; width: min(480px, 90%); padding: 40px 32px; border-radius: 32px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); }
+        .start-rune { position: absolute; left: 50%; top: 50%; translate: -50% -50%; pointer-events: none; }
         .start-card h2 { margin: 0 0 12px; font-size: 36px; font-weight: 900; }
         .start-card p { color: #93a0bc; margin-bottom: 24px; line-height: 1.6; }
         .pose-preview { display: flex; justify-content: center; gap: 16px; margin: 20px 0; flex-wrap: wrap; }
@@ -955,6 +958,7 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
                 {/* START SCREEN */}
                 {showStartScreen && !loading && (
                   <div className="start-screen">
+                    <MagicCircle className="start-rune" size="min(76vmin, 540px)" color="#7fb0ff" spin={64} opacity={0.3} />
                     <div className="start-card">
                       <h2>🔮 Arcane Gate</h2>
                       <p>ประตูเวทมนตร์กำลังเคลื่อนเข้ามา! ร่ายท่าคาถาให้ตรงกับช่องว่างก่อนมันจะถึงตัวคุณ<br />ใช้กล้องและ AI ตรวจจับท่าทางของคุณแบบเรียลไทม์</p>
