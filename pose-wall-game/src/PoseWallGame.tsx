@@ -13,9 +13,8 @@ declare global {
   }
 }
 
-// FIX: PoseKey ต้องตรงกับ key จริงที่ใช้ใน POSES ด้านล่าง (เดิมพิมพ์เป็นชื่อท่าโยคะเก่าที่ไม่ตรงกัน
-// ทำให้ TypeScript คอมไพล์ไม่ผ่านทั้งไฟล์)
 type PoseKey = 'Two hand' | 'one side' | 'one leg up' | 'tree';
+type GamePhase = 'idle' | 'loading' | 'ready' | 'playing' | 'gameover';
 
 interface PoseInfo {
   key: PoseKey;
@@ -26,12 +25,16 @@ interface PoseInfo {
   accent: string;
   icon: string;
   color: string;
+  glow: string;
 }
 
-interface WallSlot {
+interface Wall {
   id: number;
   pose: PoseKey;
-  x: number;
+  z: number;        // ระยะจากกล้อง (0 = ไกล, 100 = ใกล้/ชน)
+  state: 'approach' | 'lock' | 'hit' | 'miss' | 'passed';
+  scale: number;
+  opacity: number;
 }
 
 interface Particle {
@@ -48,16 +51,16 @@ interface Particle {
 // ============================================
 // CONFIGURATION
 // ============================================
-// แก้ MODEL_URL ให้เป็นลิงก์โมเดล Pose Project ของคุณเอง (ต้องมี 4 class)
 const MODEL_URL = 'https://teachablemachine.withgoogle.com/models/7C6Gkj5M7/';
-const CONFIDENCE_LIMIT = 0.8;
+const CONFIDENCE_LIMIT = 0.80;
 const CAMERA_SIZE = 420;
 const GAME_SECONDS = 60;
-const TARGET_DISTANCE = 600; // ตำแหน่งที่กำแพงเดินสุดขวาแล้วเกิดใหม่
-const WALL_SPEED = 2.8; // ต่อ "เฟรม 60fps" หนึ่งหน่วย (ปรับตามเวลาจริงด้วย dt ด้านล่าง)
-const WALL_GAP = 260; // ระยะห่างระหว่างกำแพงแต่ละบาน
-const CENTER_X = 200; // ตำแหน่ง x ที่ถือว่า "อยู่ตรงจุดตรวจจับ"
-const HIT_ZONE = 300; // รัศมีรอบ CENTER_X ที่นับว่าเป็นเป้าหมายปัจจุบัน / ทำคะแนนได้
+const WALL_APPROACH_SPEED = 0.35;  // ความเร็วกำแพงเข้ามา (% ต่อเฟรม 60fps)
+const WALL_SPAWN_Z = -10;          // จุดเกิดกำแพง (ไกล)
+const WALL_LOCK_Z = 50;            // จุดตรวจสอบท่า
+const WALL_PASS_Z = 85;            // จุดทะลุผ่าน
+const WALL_DESPAWN_Z = 110;        // จุดหายไป
+const SPAWN_INTERVAL = 280;        // ระยะเฟรมระหว่างกำแพง
 
 const POSES: Record<PoseKey, PoseInfo> = {
   'Two hand': {
@@ -66,9 +69,10 @@ const POSES: Record<PoseKey, PoseInfo> = {
     short: 'TWO HAND',
     aliases: ['two hand', 'two hands', 'สองมือ', 'ยกสองมือ', 'class 1', 'pose1', 'pose 1'],
     points: 100,
-    accent: '#4CAF50',
+    accent: '#00e5ff',
     icon: '🙌',
-    color: '#4CAF50',
+    color: '#00e5ff',
+    glow: 'rgba(0,229,255,0.4)',
   },
   'one side': {
     key: 'one side',
@@ -76,28 +80,21 @@ const POSES: Record<PoseKey, PoseInfo> = {
     short: 'ONE SIDE',
     aliases: ['one side', 'oneside', 'ข้างเดียว', 'เอียงข้าง', 'class 2', 'pose2', 'pose 2'],
     points: 150,
-    accent: '#FF9800',
+    accent: '#ff477e',
     icon: '🤾',
-    color: '#FF9800',
+    color: '#ff477e',
+    glow: 'rgba(255,71,126,0.4)',
   },
   'one leg up': {
     key: 'one leg up',
     label: 'ยกขาข้างเดียว',
     short: 'LEG UP',
-    aliases: [
-      'one leg up',
-      'oneleg up',
-      'one leg',
-      'ขาเดียว',
-      'ยกขาข้างเดียว',
-      'class 3',
-      'pose3',
-      'pose 3',
-    ],
+    aliases: ['one leg up', 'oneleg up', 'one leg', 'ขาเดียว', 'ยกขาข้างเดียว', 'class 3', 'pose3', 'pose 3'],
     points: 150,
-    accent: '#9C27B0',
+    accent: '#76ff03',
     icon: '🦩',
-    color: '#9C27B0',
+    color: '#76ff03',
+    glow: 'rgba(118,255,3,0.4)',
   },
   tree: {
     key: 'tree',
@@ -105,14 +102,13 @@ const POSES: Record<PoseKey, PoseInfo> = {
     short: 'TREE',
     aliases: ['tree', 'tree pose', 'ต้นไม้', 'ท่าต้นไม้', 'class 4', 'pose4', 'pose 4'],
     points: 150,
-    accent: '#2196F3',
+    accent: '#ffab00',
     icon: '🌳',
-    color: '#2196F3',
+    color: '#ffab00',
+    glow: 'rgba(255,171,0,0.4)',
   },
 };
 
-// ลำดับนี้ใช้เป็น fallback เวลาจับคู่ชื่อ class จากโมเดลไม่ได้ (ดู buildLabelMap ด้านล่าง)
-// ควรตรงกับลำดับที่เทรน 4 ท่านี้ใน Teachable Machine: Two hand → one side → one leg up → tree
 const POSE_ORDER: PoseKey[] = ['Two hand', 'one side', 'one leg up', 'tree'];
 
 // ============================================
@@ -135,102 +131,87 @@ function matchModelLabel(label: string): PoseKey | null {
 
 function buildLabelMap(labels: string[]): Record<string, PoseKey> {
   const map: Record<string, PoseKey> = {};
-  const usedPoseKeys = new Set<PoseKey>();
-
+  const used = new Set<PoseKey>();
   labels.forEach((label) => {
     const matched = matchModelLabel(label);
-    if (matched && !usedPoseKeys.has(matched)) {
+    if (matched && !used.has(matched)) {
       map[label] = matched;
-      usedPoseKeys.add(matched);
+      used.add(matched);
     }
   });
-
-  const remainingPoseKeys = POSE_ORDER.filter((key) => !usedPoseKeys.has(key));
+  const remaining = POSE_ORDER.filter((k) => !used.has(k));
   let cursor = 0;
   labels.forEach((label) => {
-    if (!map[label] && cursor < remainingPoseKeys.length) {
-      map[label] = remainingPoseKeys[cursor];
-      cursor += 1;
+    if (!map[label] && cursor < remaining.length) {
+      map[label] = remaining[cursor++];
     }
   });
-
   return map;
 }
 
-function randomPose(previous?: PoseKey): PoseKey {
-  const candidates = POSE_ORDER.filter((key) => key !== previous);
-  return candidates[Math.floor(Math.random() * candidates.length)];
+function randomPose(prev?: PoseKey): PoseKey {
+  const c = POSE_ORDER.filter((k) => k !== prev);
+  return c[Math.floor(Math.random() * c.length)];
 }
 
-function createWallSlot(id: number, pose: PoseKey, x: number): WallSlot {
-  return { id, pose, x };
-}
-
-function createInitialWall(): WallSlot[] {
-  return [
-    createWallSlot(1, randomPose(), CENTER_X - WALL_GAP * 2),
-    createWallSlot(2, randomPose(), CENTER_X - WALL_GAP),
-    createWallSlot(3, randomPose(), CENTER_X),
-  ];
+function createWall(id: number, pose: PoseKey): Wall {
+  return {
+    id,
+    pose,
+    z: WALL_SPAWN_Z,
+    state: 'approach',
+    scale: 0.3,
+    opacity: 0,
+  };
 }
 
 // ============================================
-// SILHOUETTE COMPONENT
+// SILHOUETTE SVG PATHS
 // ============================================
-function Silhouette({ pose, active = false }: { pose: PoseKey; active?: boolean }) {
+const SILHOUETTE_PATHS: Record<PoseKey, string[]> = {
+  'Two hand': [
+    'M80 30 C65 30 55 40 55 55 C55 70 65 80 80 80 C95 80 105 70 105 55 C105 40 95 30 80 30 Z',
+    'M80 80 L80 130',
+    'M80 90 L50 60 L40 30',
+    'M80 90 L110 60 L120 30',
+    'M80 130 L60 180 L50 180',
+    'M80 130 L100 180 L110 180',
+  ],
+  'one side': [
+    'M80 35 C68 35 60 45 60 58 C60 70 68 78 80 78 C92 78 100 70 100 58 C100 45 92 35 80 35 Z',
+    'M80 78 L80 125',
+    'M80 85 L45 70 L30 50',
+    'M80 85 L115 90 L130 85',
+    'M80 125 L70 175 L60 175',
+    'M80 125 L95 170 L105 170',
+  ],
+  'one leg up': [
+    'M80 32 C68 32 58 42 58 55 C58 68 68 76 80 76 C92 76 102 68 102 55 C102 42 92 32 80 32 Z',
+    'M80 76 L80 120',
+    'M80 85 L55 95 L45 85',
+    'M80 85 L105 95 L115 85',
+    'M80 120 L75 175 L65 175',
+    'M80 120 L110 150 L120 140',
+  ],
+  tree: [
+    'M80 30 C68 30 60 40 60 52 C60 64 68 72 80 72 C92 72 100 64 100 52 C100 40 92 30 80 30 Z',
+    'M80 72 L80 118',
+    'M80 80 L55 55 L45 35',
+    'M80 80 L105 55 L115 35',
+    'M80 118 L70 178 L60 178',
+    'M80 118 L105 155 L115 145',
+  ],
+};
+
+function Silhouette({ pose, size = 200 }: { pose: PoseKey; size?: number }) {
+  const paths = SILHOUETTE_PATHS[pose];
   return (
-    <svg
-      className={`silhouette ${active ? 'is-active' : ''}`}
-      viewBox="0 0 160 220"
-      role="img"
-      aria-label={POSES[pose].label}
-    >
-      <g className="silhouette__person">
-        <circle cx="80" cy="34" r="20" />
-
-        {pose === 'Two hand' && (
-          <>
-            {/* แขนสองข้างยกขึ้นเหนือหัว (ท่า Y) */}
-            <path d="M68 61 C55 46 46 33 38 18 L28 24 L48 68 C55 80 65 88 78 88 Z" />
-            <path d="M92 61 C105 46 114 33 122 18 L132 24 L112 68 C105 80 95 88 82 88 Z" />
-            <path d="M67 85 L52 125 L38 183 L55 186 L71 133 L89 133 L105 186 L122 183 L108 125 L93 85 Z" />
-          </>
-        )}
-
-        {pose === 'one side' && (
-          <>
-            {/* แขนขวาเหยียดออกด้านข้าง แขนซ้ายแนบตัว ขาก้าวเยื้องไปด้านข้าง */}
-            <path d="M72 63 C64 68 58 74 55 82 L62 90 C68 84 73 79 78 74 Z" />
-            <path d="M88 57 C98 69 109 74 124 76 L141 64 L149 75 L126 95 C119 101 110 103 101 101 L85 93 Z" />
-            <path d="M66 87 L58 118 L46 178 L63 181 L74 130 L86 130 L100 178 L117 178 L106 122 L96 87 Z" />
-          </>
-        )}
-
-        {pose === 'one leg up' && (
-          <>
-            {/* แขนสองข้างกางออกเล็กน้อยเพื่อทรงตัว ขาข้างหนึ่งยกงอเข่าไปด้านหน้า */}
-            <path d="M70 60 C60 66 52 70 42 72 L34 64 L40 74 L58 88 C63 92 69 93 75 91 Z" />
-            <path d="M90 60 C100 66 108 70 118 72 L126 64 L120 74 L102 88 C97 92 91 93 85 91 Z" />
-            <path d="M70 87 L62 130 L55 186 L72 186 L80 135 Z" />
-            <path d="M88 87 L96 110 L118 108 L120 122 L98 128 L84 118 Z" />
-          </>
-        )}
-
-        {pose === 'tree' && (
-          <>
-            {/* มือสองข้างประกบกันเหนือหัว ขาข้างหนึ่งยืนตรง อีกข้างงอเท้าพิงต้นขา (ท่าต้นไม้) */}
-            <path d="M74 60 C70 44 68 30 68 14 L78 12 L82 58 Z" />
-            <path d="M86 60 C90 44 92 30 92 14 L82 12 L78 58 Z" />
-            <path d="M72 87 L66 130 L60 186 L77 186 L82 135 Z" />
-            <path d="M88 87 L108 95 L116 82 L124 90 L112 106 L90 108 Z" />
-          </>
-        )}
-
-        <path className="silhouette__body" d="M67 63 Q80 55 93 63 L99 103 Q80 115 61 103 Z" />
+    <svg width={size} height={size * 1.3} viewBox="0 0 160 210" style={{ display: 'block' }}>
+      <g fill="none" stroke={POSES[pose].color} strokeWidth="5" strokeLinecap="round" strokeLinejoin="round">
+        {paths.map((d, i) => (
+          <path key={i} d={d} />
+        ))}
       </g>
-      <text x="80" y="211" textAnchor="middle" className="silhouette__label">
-        {POSES[pose].short}
-      </text>
     </svg>
   );
 }
@@ -238,51 +219,53 @@ function Silhouette({ pose, active = false }: { pose: PoseKey; active?: boolean 
 // ============================================
 // MAIN COMPONENT
 // ============================================
-export default function PoseWallGame() {
+export default function PoseMiiPlus() {
+  // Refs
   const webcamRef = useRef<any>(null);
   const modelRef = useRef<any>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const predictionBusyRef = useRef(false);
-  const wallRef = useRef<WallSlot[]>(createInitialWall());
-  const nextWallIdRef = useRef(4);
+  const wallsRef = useRef<Wall[]>([]);
+  const nextWallIdRef = useRef(1);
   const scoreRef = useRef(0);
   const comboRef = useRef(0);
   const matchedRef = useRef(0);
+  const livesRef = useRef(3);
   const startedAtRef = useRef(0);
   const gameOverRef = useRef(false);
-  const currentTargetRef = useRef<PoseKey>(wallRef.current[2]?.pose ?? 'Two hand');
+  const currentTargetRef = useRef<PoseKey | null>(null);
   const lastScoredWallIdRef = useRef<number | null>(null);
   const frameRef = useRef(0);
   const particlesRef = useRef<Particle[]>([]);
   const nextParticleIdRef = useRef(1);
   const shakeRef = useRef(0);
-  // FIX: เก็บผลจับคู่ "ชื่อ class จริงจากโมเดล" -> PoseKey ของเกม (สร้างครั้งเดียวตอนโหลดโมเดลเสร็จ)
   const labelToPoseRef = useRef<Record<string, PoseKey>>({});
   const poseToLabelRef = useRef<Partial<Record<PoseKey, string>>>({});
+  const spawnTimerRef = useRef(0);
 
+  // State
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
   const [gameOver, setGameOver] = useState(false);
   const [score, setScore] = useState(0);
   const [combo, setCombo] = useState(0);
+  const [lives, setLives] = useState(3);
   const [timeLeft, setTimeLeft] = useState(GAME_SECONDS);
   const [confidence, setConfidence] = useState(0);
   const [detectedPose, setDetectedPose] = useState<PoseKey | 'unknown'>('unknown');
-  const [targetPose, setTargetPose] = useState<PoseKey>(currentTargetRef.current);
-  const [message, setMessage] = useState('กด "เริ่มเกม" แล้วทำตามท่าบนกำแพง');
+  const [targetPose, setTargetPose] = useState<PoseKey | null>(null);
+  const [message, setMessage] = useState('กด "เริ่มเกม" เพื่อเล่น');
   const [modelClasses, setModelClasses] = useState<string[]>([]);
   const [flash, setFlash] = useState(false);
   const [lastPoints, setLastPoints] = useState<number | null>(null);
-  const [wallSlots, setWallSlots] = useState<WallSlot[]>(() => createInitialWall());
+  const [walls, setWalls] = useState<Wall[]>([]);
   const [classScores, setClassScores] = useState<Record<string, number>>({});
   const [particleTick, setParticleTick] = useState(0);
+  const [showStartScreen, setShowStartScreen] = useState(true);
 
-  const targetInfo = POSES[targetPose];
+  const targetInfo = targetPose ? POSES[targetPose] : null;
   const detectedInfo = detectedPose !== 'unknown' ? POSES[detectedPose] : null;
-
-  // เก็บ particleTick ไว้เผื่อ debug อ่าน state ปัจจุบัน (ไม่ได้ใช้โดยตรงในการ render)
-  void particleTick;
 
   // ==========================================
   // LOAD SCRIPTS
@@ -302,64 +285,43 @@ export default function PoseWallGame() {
   };
 
   // ==========================================
-  // INITIALIZE MODEL & CAMERA
+  // INIT MODEL
   // ==========================================
   const loadModel = useCallback(async () => {
     if (modelRef.current && webcamRef.current) return;
-
     setLoading(true);
     setMessage('กำลังโหลด AI และเปิดกล้อง...');
 
     await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js');
-    await loadScript(
-      'https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8.3/dist/teachablemachine-pose.min.js'
-    );
+    await loadScript('https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8.3/dist/teachablemachine-pose.min.js');
 
     const tmPose = window.tmPose;
-    const modelURL = `${MODEL_URL}model.json`;
-    const metadataURL = `${MODEL_URL}metadata.json`;
-
-    const model = await tmPose.load(modelURL, metadataURL);
+    const model = await tmPose.load(`${MODEL_URL}model.json`, `${MODEL_URL}metadata.json`);
     const webcam = new tmPose.Webcam(CAMERA_SIZE, CAMERA_SIZE, true);
-
     await webcam.setup();
     await webcam.play();
 
     modelRef.current = model;
     webcamRef.current = webcam;
 
-    // FIX: ดึง "ชื่อ class จริง" จากโมเดลแทนการสร้างชื่อปลอม "Class 1/2/3" แล้วจับคู่กับ PoseKey
     let labels: string[] = [];
     try {
-      if (typeof model.getClassLabels === 'function') {
-        labels = model.getClassLabels();
-      } else if (typeof model.getTotalClasses === 'function') {
+      if (typeof model.getClassLabels === 'function') labels = model.getClassLabels();
+      else if (typeof model.getTotalClasses === 'function') {
         labels = Array.from({ length: model.getTotalClasses() }, (_, i) => `Class ${i + 1}`);
       }
-    } catch {
-      labels = [];
-    }
-
-    if (labels.length !== POSE_ORDER.length) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `โมเดลมี ${labels.length} class แต่เกมนี้ออกแบบไว้สำหรับ 4 ท่า (Two hand, one side, one leg up, tree) ` +
-          'บางท่าอาจตรวจจับไม่ได้จนกว่าจะแก้โมเดลหรือ POSE_ORDER ให้ตรงกัน'
-      );
-    }
+    } catch { /* ignore */ }
 
     const map = buildLabelMap(labels);
     labelToPoseRef.current = map;
     const reverse: Partial<Record<PoseKey, string>> = {};
-    Object.entries(map).forEach(([label, poseKey]) => {
-      reverse[poseKey] = label;
-    });
+    Object.entries(map).forEach(([l, k]) => { reverse[k] = l; });
     poseToLabelRef.current = reverse;
 
     setModelClasses(labels);
     setReady(true);
     setLoading(false);
-    setMessage('พร้อมแล้ว! กดเริ่มเกม');
+    setMessage('พร้อม! กดเริ่มเกม');
 
     if (canvasRef.current) {
       canvasRef.current.width = CAMERA_SIZE;
@@ -370,55 +332,49 @@ export default function PoseWallGame() {
   // ==========================================
   // GAME CONTROL
   // ==========================================
-  const resetWall = useCallback(() => {
-    const wall = createInitialWall();
-    wallRef.current = wall;
-    nextWallIdRef.current = 4;
-    setWallSlots(wall);
-    currentTargetRef.current = wall[2]?.pose ?? 'Two hand';
-    setTargetPose(currentTargetRef.current);
-    lastScoredWallIdRef.current = null;
-  }, []);
-
   const resetGame = useCallback(() => {
+    wallsRef.current = [];
+    nextWallIdRef.current = 1;
     scoreRef.current = 0;
     comboRef.current = 0;
     matchedRef.current = 0;
+    livesRef.current = 3;
     gameOverRef.current = false;
     startedAtRef.current = performance.now();
     frameRef.current = 0;
     particlesRef.current = [];
     nextParticleIdRef.current = 1;
     shakeRef.current = 0;
+    spawnTimerRef.current = 0;
+    currentTargetRef.current = null;
+    lastScoredWallIdRef.current = null;
+
     setScore(0);
     setCombo(0);
+    setLives(3);
     setTimeLeft(GAME_SECONDS);
     setGameOver(false);
     setLastPoints(null);
     setFlash(false);
-    setMessage('กำแพงกำลังเข้ามา เตรียมทำตาม silhouette!');
+    setMessage('ทำท่าให้ตรงกับช่องว่างในกำแพง!');
     setDetectedPose('unknown');
-    resetWall();
-  }, [resetWall]);
+    setTargetPose(null);
+    setWalls([]);
+    setShowStartScreen(false);
+  }, []);
 
   const startGame = useCallback(async () => {
     try {
       if (!ready) await loadModel();
       resetGame();
       setRunning(true);
-      setMessage('เริ่ม! ทำท่าให้ตรงกับกำแพง');
-    } catch (error) {
-      console.error(error);
+      setMessage('เริ่ม! กำแพงกำลังเข้ามา...');
+    } catch (err) {
+      console.error(err);
       setLoading(false);
-      setMessage('เปิดกล้องหรือโหลดโมเดลไม่ได้ กรุณาตรวจสอบ MODEL_URL และสิทธิ์กล้อง');
+      setMessage('โหลดโมเดลหรือกล้องไม่สำเร็จ');
     }
   }, [loadModel, ready, resetGame]);
-
-  const restartGame = useCallback(() => {
-    resetGame();
-    setRunning(true);
-    setMessage('เริ่มใหม่! ทำท่าให้ตรงกับกำแพง');
-  }, [resetGame]);
 
   const stopGame = useCallback(() => {
     setRunning(false);
@@ -428,49 +384,72 @@ export default function PoseWallGame() {
   }, []);
 
   // ==========================================
-  // SCORING
+  // PARTICLES
   // ==========================================
-  const addParticles = useCallback((x: number, y: number, color: string) => {
-    for (let i = 0; i < 24; i += 1) {
+  const addParticles = useCallback((x: number, y: number, color: string, count = 30) => {
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count + Math.random() * 0.5;
+      const speed = 3 + Math.random() * 6;
       particlesRef.current.push({
         id: nextParticleIdRef.current++,
         x,
         y,
-        vx: (Math.random() - 0.5) * 10,
-        vy: (Math.random() - 0.5) * 10,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 2,
         life: 1,
         color,
-        size: Math.random() * 8 + 2,
+        size: 3 + Math.random() * 6,
       });
     }
+    setParticleTick((t) => t + 1);
   }, []);
 
-  const scoreHit = useCallback(
-    (wall: WallSlot, hitConfidence: number) => {
-      if (lastScoredWallIdRef.current === wall.id) return;
+  // ==========================================
+  // SCORING
+  // ==========================================
+  const scoreHit = useCallback((wall: Wall, hitConfidence: number) => {
+    if (lastScoredWallIdRef.current === wall.id) return;
+    const perfect = hitConfidence >= 0.92;
+    const base = POSES[wall.pose].points;
+    const bonus = Math.min(comboRef.current * 15, 150);
+    const points = base + bonus + (perfect ? 50 : 0);
 
-      const perfect = hitConfidence >= 0.92;
-      const basePoints = POSES[wall.pose].points;
-      const comboBonus = Math.min(comboRef.current * 10, 100);
-      const points = basePoints + comboBonus + (perfect ? 50 : 0);
+    lastScoredWallIdRef.current = wall.id;
+    scoreRef.current += points;
+    comboRef.current += 1;
+    matchedRef.current += 1;
 
-      lastScoredWallIdRef.current = wall.id;
-      scoreRef.current += points;
-      comboRef.current += 1;
-      matchedRef.current += 1;
+    setScore(scoreRef.current);
+    setCombo(comboRef.current);
+    setLastPoints(points);
+    setFlash(true);
+    setMessage(perfect ? `✨ PERFECT! +${points}` : `🎯 NICE! +${points}`);
+    addParticles(50, 50, POSES[wall.pose].color, 36);
+    shakeRef.current = 4;
 
-      setScore(scoreRef.current);
-      setCombo(comboRef.current);
-      setLastPoints(points);
-      setFlash(true);
-      setMessage(perfect ? `PERFECT! +${points}` : `ตรงท่า! +${points}`);
-      addParticles(400, 200, POSES[wall.pose].accent);
-      shakeRef.current = 6;
+    // Mark wall as passed
+    const w = wallsRef.current.find((x) => x.id === wall.id);
+    if (w) w.state = 'passed';
 
-      window.setTimeout(() => setFlash(false), 250);
-    },
-    [addParticles]
-  );
+    window.setTimeout(() => setFlash(false), 300);
+  }, [addParticles]);
+
+  const handleMiss = useCallback((wall: Wall) => {
+    livesRef.current -= 1;
+    setLives(livesRef.current);
+    comboRef.current = 0;
+    setCombo(0);
+    setMessage('💥 ชน! ท่าไม่ตรง');
+    shakeRef.current = 12;
+    addParticles(50, 50, '#ff1744', 20);
+
+    const w = wallsRef.current.find((x) => x.id === wall.id);
+    if (w) w.state = 'miss';
+
+    if (livesRef.current <= 0) {
+      window.setTimeout(stopGame, 600);
+    }
+  }, [addParticles, stopGame]);
 
   // ==========================================
   // POSE PREDICTION
@@ -482,7 +461,6 @@ export default function PoseWallGame() {
     if (!model || !webcam) return;
 
     predictionBusyRef.current = true;
-
     try {
       webcam.update();
       const canvas = canvasRef.current;
@@ -500,43 +478,33 @@ export default function PoseWallGame() {
         window.tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
       }
 
-      if (!predictions || predictions.length === 0) return;
+      if (!predictions?.length) return;
 
-      // อัปเดตความมั่นใจของ "ชื่อ class จริง" ทุกตัว (ใช้แสดงผลใน UI)
       const scores: Record<string, number> = {};
-      predictions.forEach((p: any) => {
-        scores[p.className] = p.probability;
-      });
+      predictions.forEach((p: any) => { scores[p.className] = p.probability; });
       setClassScores(scores);
 
       let best = predictions[0];
-      for (let i = 1; i < predictions.length; i += 1) {
+      for (let i = 1; i < predictions.length; i++) {
         if (predictions[i].probability > best.probability) best = predictions[i];
       }
 
-      // FIX: ใช้ตารางที่จับคู่ไว้ตอนโหลดโมเดล (แม่นยำกว่าการเดาชื่อ alias สดๆ ทุกเฟรม)
       const fromMap = labelToPoseRef.current[best.className];
       const mapped: PoseKey | null = fromMap ?? matchModelLabel(best.className);
-      const nextConfidence = best.probability;
-      setConfidence(nextConfidence);
+      const conf = best.probability;
+      setConfidence(conf);
 
-      if (nextConfidence >= CONFIDENCE_LIMIT && mapped) {
+      if (conf >= CONFIDENCE_LIMIT && mapped) {
         setDetectedPose(mapped);
-
-        if (mapped === currentTargetRef.current) {
-          const target = wallRef.current.find(
-            (slot) =>
-              slot.pose === currentTargetRef.current && Math.abs(slot.x - CENTER_X) < HIT_ZONE
+        const target = currentTargetRef.current;
+        if (target && mapped === target) {
+          const activeWall = wallsRef.current.find(
+            (w) => w.pose === target && w.state === 'lock' && w.id !== lastScoredWallIdRef.current
           );
-          if (target) scoreHit(target, nextConfidence);
-        } else {
-          comboRef.current = 0;
-          setCombo(0);
-          setMessage(`กำแพงบอกท่า: ${POSES[currentTargetRef.current].label}`);
+          if (activeWall) scoreHit(activeWall, conf);
         }
       } else {
         setDetectedPose('unknown');
-        setMessage('ยังจับท่าไม่ชัด ลองอยู่เต็มตัวในกล้อง');
       }
     } finally {
       predictionBusyRef.current = false;
@@ -544,88 +512,99 @@ export default function PoseWallGame() {
   }, [running, scoreHit]);
 
   // ==========================================
-  // WALL MOVEMENT
-  // ==========================================
-  const advanceWall = useCallback((dt: number = 1) => {
-    for (let i = 0; i < wallRef.current.length; i += 1) {
-      wallRef.current[i].x += WALL_SPEED * dt;
-    }
-
-    const passed = wallRef.current.find((slot) => slot.x > TARGET_DISTANCE);
-    if (passed) {
-      const nextPose = randomPose(wallRef.current[wallRef.current.length - 1]?.pose);
-      const lastX = wallRef.current[wallRef.current.length - 1]?.x ?? TARGET_DISTANCE;
-      const nextX = lastX - WALL_GAP;
-      const nextId = nextWallIdRef.current++;
-      wallRef.current = [
-        ...wallRef.current.filter((slot) => slot.id !== passed.id),
-        createWallSlot(nextId, nextPose, nextX),
-      ];
-    }
-
-    setWallSlots([...wallRef.current]);
-
-    const target =
-      wallRef.current.find(
-        (slot) => slot.x > CENTER_X - HIT_ZONE && slot.x < CENTER_X + HIT_ZONE
-      ) ?? wallRef.current[1];
-    if (target && target.pose !== currentTargetRef.current) {
-      currentTargetRef.current = target.pose;
-      setTargetPose(target.pose);
-      lastScoredWallIdRef.current = null;
-    }
-  }, []);
-
-  // ==========================================
   // GAME LOOP
-  // FIX: เดิมใช้ requestAnimationFrame(gameLoop) เรียกตัวเองซ้ำจากใน event handler
-  // (startGame / ปุ่มเริ่มใหม่) ซึ่งฟังก์ชัน gameLoop ที่ถูกอ้างถึงตอนนั้นยังจำค่า
-  // running = false จากตอนสร้างคอมโพเนนต์ครั้งแรก (stale closure) ทำให้ลูปเกม
-  // ทำงานแค่เฟรมเดียวแล้วหยุดไปเฉยๆ (กำแพงไม่ขยับ, เวลาไม่นับถอยหลัง)
-  // แก้โดยย้ายลูปทั้งหมดไปอยู่ใน useEffect ที่ผูกกับ state `running` โดยตรง
-  // เหมือนกับ useEffect ของ predictPose ด้านล่าง และเพิ่ม delta-time (dt)
-  // เพื่อให้ความเร็วกำแพงคงที่ไม่ว่าจอจะรีเฟรชกี่ Hz ก็ตาม
   // ==========================================
   useEffect(() => {
     if (!running) return undefined;
-
     let raf = 0;
     let lastTime = performance.now();
 
     const tick = (now: number) => {
       if (gameOverRef.current) return;
-
-      const dt = Math.min(2, (now - lastTime) / (1000 / 60));
+      const dt = Math.min(2.5, (now - lastTime) / (1000 / 60));
       lastTime = now;
 
-      frameRef.current += 1;
+      // Timer
       const elapsed = (now - startedAtRef.current) / 1000;
       const remaining = Math.max(0, Math.ceil(GAME_SECONDS - elapsed));
       setTimeLeft(remaining);
+      if (remaining <= 0) { stopGame(); return; }
 
-      if (remaining <= 0) {
-        stopGame();
-        return;
+      // Spawn walls
+      spawnTimerRef.current += dt;
+      if (spawnTimerRef.current >= SPAWN_INTERVAL) {
+        spawnTimerRef.current = 0;
+        const lastPose = wallsRef.current[wallsRef.current.length - 1]?.pose;
+        const newWall = createWall(nextWallIdRef.current++, randomPose(lastPose));
+        wallsRef.current.push(newWall);
       }
 
-      advanceWall(dt);
+      // Update walls
+      const wallList = wallsRef.current;
+      for (let i = wallList.length - 1; i >= 0; i--) {
+        const w = wallList[i];
+        if (w.state === 'passed' || w.state === 'miss') {
+          w.z += WALL_APPROACH_SPEED * dt * 2;
+          w.opacity -= 0.03 * dt;
+          if (w.opacity <= 0 || w.z > WALL_DESPAWN_Z) {
+            wallList.splice(i, 1);
+          }
+          continue;
+        }
 
+        w.z += WALL_APPROACH_SPEED * dt;
+        // Scale & opacity based on Z (0-100)
+        const progress = Math.max(0, Math.min(1, (w.z - WALL_SPAWN_Z) / (WALL_PASS_Z - WALL_SPAWN_Z)));
+        w.scale = 0.25 + progress * 0.85;
+        w.opacity = progress < 0.1 ? progress * 10 : (progress > 0.9 ? (1 - progress) * 10 : 1);
+
+        // State transitions
+        if (w.z >= WALL_LOCK_Z && w.z < WALL_LOCK_Z + 5 && w.state === 'approach') {
+          w.state = 'lock';
+          currentTargetRef.current = w.pose;
+          setTargetPose(w.pose);
+          setMessage(`ทำท่า: ${POSES[w.pose].label}!`);
+        }
+
+        if (w.z >= WALL_PASS_Z && w.state === 'lock') {
+          // Player failed to match in time
+          handleMiss(w);
+        }
+
+        if (w.z > WALL_DESPAWN_Z) {
+          wallList.splice(i, 1);
+        }
+      }
+
+      // Update target to nearest lock wall
+      const lockWall = wallList.find((w) => w.state === 'lock');
+      if (lockWall) {
+        currentTargetRef.current = lockWall.pose;
+        setTargetPose(lockWall.pose);
+      } else if (!wallList.some((w) => w.state === 'approach' && w.z > WALL_LOCK_Z - 20)) {
+        currentTargetRef.current = null;
+        setTargetPose(null);
+      }
+
+      setWalls([...wallList]);
+
+      // Particles
       const particles = particlesRef.current;
-      let particlesChanged = false;
-      for (let i = particles.length - 1; i >= 0; i -= 1) {
+      let changed = false;
+      for (let i = particles.length - 1; i >= 0; i--) {
         particles[i].x += particles[i].vx * dt;
         particles[i].y += particles[i].vy * dt;
-        particles[i].life -= 0.025 * dt;
-        if (particles[i].life <= 0) {
-          particles.splice(i, 1);
-        }
-        particlesChanged = true;
+        particles[i].vy += 0.15 * dt; // gravity
+        particles[i].life -= 0.02 * dt;
+        if (particles[i].life <= 0) particles.splice(i, 1);
+        changed = true;
       }
-      if (particlesChanged) setParticleTick((t) => t + 1);
+      if (changed) setParticleTick((t) => t + 1);
 
+      // Shake decay
       if (shakeRef.current > 0) {
-        shakeRef.current *= Math.pow(0.9, dt);
-        if (shakeRef.current < 0.5) shakeRef.current = 0;
+        shakeRef.current *= Math.pow(0.88, dt);
+        if (shakeRef.current < 0.3) shakeRef.current = 0;
       }
 
       raf = requestAnimationFrame(tick);
@@ -633,7 +612,7 @@ export default function PoseWallGame() {
 
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [running, advanceWall, stopGame]);
+  }, [running, stopGame, handleMiss]);
 
   // ==========================================
   // PREDICTION LOOP
@@ -642,18 +621,13 @@ export default function PoseWallGame() {
     if (!running || gameOverRef.current) return undefined;
     let active = true;
     let timer = 0;
-
-    const runPrediction = async () => {
+    const run = async () => {
       if (!active) return;
       await predictPose();
-      timer = window.setTimeout(runPrediction, 120);
+      timer = window.setTimeout(run, 100);
     };
-
-    timer = window.setTimeout(runPrediction, 50);
-    return () => {
-      active = false;
-      window.clearTimeout(timer);
-    };
+    timer = window.setTimeout(run, 50);
+    return () => { active = false; window.clearTimeout(timer); };
   }, [predictPose, running]);
 
   // ==========================================
@@ -661,11 +635,7 @@ export default function PoseWallGame() {
   // ==========================================
   useEffect(() => {
     return () => {
-      try {
-        webcamRef.current?.stop?.();
-      } catch {
-        // เพิกเฉยได้ — แค่พยายามปิดกล้องให้เรียบร้อยตอน unmount
-      }
+      try { webcamRef.current?.stop?.(); } catch { /* ignore */ }
       webcamRef.current = null;
       modelRef.current = null;
     };
@@ -674,110 +644,224 @@ export default function PoseWallGame() {
   // ==========================================
   // RENDER HELPERS
   // ==========================================
-  const wallStyle = (x: number): CSSProperties => ({
-    transform: `translateX(${x}px)`,
-    transition: 'transform 80ms linear',
-  });
-
   const statusTone = gameOver ? 'danger' : detectedPose === targetPose ? 'success' : 'neutral';
+
+  const getWallTransform = (wall: Wall): CSSProperties => {
+    const shakeX = shakeRef.current > 0 && wall.state === 'miss' ? (Math.random() - 0.5) * shakeRef.current : 0;
+    const shakeY = shakeRef.current > 0 && wall.state === 'miss' ? (Math.random() - 0.5) * shakeRef.current : 0;
+    return {
+      transform: `translate(-50%, -50%) translateZ(${wall.z * 4}px) scale(${wall.scale}) translate(${shakeX}px, ${shakeY}px)`,
+      opacity: wall.opacity,
+      zIndex: Math.floor(wall.z),
+    };
+  };
 
   return (
     <div className={`pose-game ${flash ? 'pose-game--flash' : ''}`}>
       <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&display=swap');
         .pose-game, .pose-game * { box-sizing: border-box; }
         .pose-game {
           min-height: 100vh;
-          padding: 28px;
-          color: #15131a;
-          background:
-            radial-gradient(circle at 15% 10%, rgba(255,255,255,.95), transparent 34%),
-            linear-gradient(135deg, #e7ecff 0%, #ffe8f3 48%, #e9fff6 100%);
-          font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          padding: 20px;
+          color: #fff;
+          background: radial-gradient(ellipse at 50% 0%, #1a0b2e 0%, #0d0418 50%, #05010a 100%);
+          font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+          overflow-x: hidden;
         }
-        .pose-game--flash { animation: screenFlash .25s ease; }
-        @keyframes screenFlash { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.14); } }
-        .shell { max-width: 1380px; margin: 0 auto; }
+        .pose-game--flash { animation: screenFlash .3s ease; }
+        @keyframes screenFlash { 0%,100%{ filter: brightness(1) saturate(1); } 50%{ filter: brightness(1.6) saturate(1.3); } }
+
+        .shell { max-width: 1280px; margin: 0 auto; }
+
+        /* HEADER */
         .topbar {
-          display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 18px;
-          padding: 18px 20px; border: 1px solid rgba(255,255,255,.72); border-radius: 26px;
-          background: rgba(255,255,255,.67); backdrop-filter: blur(16px); box-shadow: 0 16px 50px rgba(54,40,90,.12);
+          display: flex; justify-content: space-between; align-items: center; gap: 16px;
+          margin-bottom: 16px; padding: 14px 20px;
+          background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+          border-radius: 20px; backdrop-filter: blur(20px);
         }
-        .brand { display:flex; gap: 13px; align-items:center; }
-        .logo { width: 48px; height: 48px; border-radius: 16px; display:grid; place-items:center; font-size: 25px; background:#18151f; color:white; box-shadow: 0 8px 20px rgba(24,21,31,.2); }
-        h1 { margin:0; font-size: clamp(22px, 3vw, 34px); letter-spacing:-.03em; }
-        .subtitle { margin: 3px 0 0; color:#6d6678; font-size:14px; }
-        .controls { display:flex; gap:10px; flex-wrap:wrap; }
-        button { border:0; cursor:pointer; border-radius: 14px; padding: 12px 16px; font-weight: 800; font-size:14px; transition:.18s transform, .18s box-shadow, .18s opacity; }
+        .brand { display:flex; gap: 12px; align-items:center; }
+        .logo {
+          width: 44px; height: 44px; border-radius: 14px;
+          background: linear-gradient(135deg, #ff477e, #7c4dff);
+          display: grid; place-items: center; font-size: 22px;
+          box-shadow: 0 0 20px rgba(255,71,126,0.3);
+        }
+        .brand h1 { margin:0; font-size: 24px; font-weight: 900; letter-spacing: -0.02em; }
+        .brand p { margin: 2px 0 0; color: #a89bb8; font-size: 13px; }
+        .controls { display:flex; gap:10px; }
+        button {
+          border: none; cursor: pointer; border-radius: 12px; padding: 10px 20px;
+          font-weight: 800; font-size: 14px; transition: all 0.2s ease;
+          font-family: inherit;
+        }
         button:hover { transform: translateY(-2px); }
-        button:disabled { cursor: not-allowed; opacity:.55; transform:none; }
-        .btn-primary { color:white; background:#18151f; box-shadow: 0 10px 20px rgba(24,21,31,.18); }
-        .btn-secondary { color:#18151f; background:white; box-shadow: 0 8px 20px rgba(24,21,31,.08); }
-        .stats { display:grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 18px; }
-        .stat { background: rgba(255,255,255,.72); border:1px solid rgba(255,255,255,.7); border-radius:20px; padding:14px 16px; box-shadow:0 10px 28px rgba(54,40,90,.08); }
-        .stat small { display:block; font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.08em; color:#81798d; margin-bottom:4px; }
-        .stat strong { font-size:28px; letter-spacing:-.04em; }
-        .content { display:grid; grid-template-columns: 390px minmax(0,1fr); gap:18px; }
-        .panel { border:1px solid rgba(255,255,255,.78); background:rgba(255,255,255,.73); backdrop-filter: blur(18px); box-shadow:0 16px 50px rgba(54,40,90,.11); border-radius:26px; padding:18px; }
-        .panel h2 { margin:0 0 12px; font-size:16px; }
-        .camera-frame { position:relative; overflow:hidden; border-radius:22px; background:#0f0c14; aspect-ratio:1; }
-        .camera-frame canvas { width:100%; height:100%; display:block; object-fit:cover; transform:scaleX(-1); }
-        .camera-badge { position:absolute; top:12px; left:12px; padding:7px 10px; background:rgba(0,0,0,.55); color:white; border-radius:999px; font-size:11px; font-weight:800; backdrop-filter:blur(8px); }
-        .detect-card { margin-top:12px; border-radius:19px; padding:14px; background:#f7f5f8; }
-        .detect-row { display:flex; justify-content:space-between; align-items:center; gap:12px; }
-        .pose-chip { display:inline-flex; align-items:center; gap:7px; padding:8px 11px; border-radius:999px; background:white; font-weight:900; box-shadow:0 4px 14px rgba(0,0,0,.06); }
-        .dot { width:9px; height:9px; border-radius:999px; background:currentColor; }
-        .confidence { margin-top:10px; height:8px; background:#ded9e4; border-radius:999px; overflow:hidden; }
-        .confidence > i { display:block; height:100%; border-radius:999px; background:linear-gradient(90deg,#4CAF50,#FF9800,#9C27B0,#2196F3); transition: width .15s ease; }
-        .model-note { margin-top:12px; padding:11px 12px; border-radius:15px; background:#fff; color:#6e6777; font-size:12px; line-height:1.5; }
-        .game-panel { min-width:0; }
-        .game-stage { position:relative; min-height:610px; overflow:hidden; border-radius:26px; background:linear-gradient(180deg, #191622 0 22%, #272231 22% 100%); border: 7px solid #f5f0f7; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
-        .stage-lights { position:absolute; inset:0 0 auto; height:24%; background: repeating-linear-gradient(90deg, rgba(255,255,255,.14) 0 16px, transparent 16px 55px); opacity:.35; }
-        .stage-lights::after { content:""; position:absolute; inset:-40% 0 0; background:radial-gradient(circle at 8% 20%, rgba(76,175,80,.42), transparent 20%), radial-gradient(circle at 50% 0%, rgba(255,152,0,.35), transparent 22%), radial-gradient(circle at 92% 24%, rgba(156,39,176,.38), transparent 20%); }
-        .floor { position:absolute; left:-5%; right:-5%; bottom:-15px; height:38%; transform:perspective(650px) rotateX(48deg); transform-origin:bottom; background:repeating-linear-gradient(90deg, rgba(255,255,255,.08) 0 2px, transparent 2px 90px), linear-gradient(180deg,#413851,#1a1721); }
-        .wall-area { position:absolute; top:64px; left:0; right:0; height:390px; display:flex; align-items:center; justify-content:center; }
-        .wall-frame { position:relative; width:min(880px,92%); height:330px; border:10px solid #ece6f3; border-radius:12px; background:linear-gradient(180deg,#df657e,#cf4765); box-shadow:0 20px 45px rgba(0,0,0,.28), inset 0 0 0 5px rgba(255,255,255,.12); overflow:hidden; }
-        .wall-grid { position:absolute; inset:0; opacity:.3; background:linear-gradient(rgba(255,255,255,.14) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.14) 1px, transparent 1px); background-size:44px 44px; }
-        .wall-holes { position:absolute; inset:22px 20px; overflow:hidden; }
-        .wall-slot { position:absolute; top:8px; width:235px; height:290px; display:grid; place-items:center; animation: slotFloat 1.7s ease-in-out infinite; }
-        .wall-slot::before { content:""; position:absolute; inset:0; border-radius:18px; background:rgba(79,15,30,.28); border:3px dashed rgba(255,255,255,.18); box-shadow: inset 0 0 25px rgba(0,0,0,.16); }
-        .wall-slot--target::before { border-color:rgba(255,255,255,.7); box-shadow: inset 0 0 30px rgba(0,0,0,.15), 0 0 0 4px rgba(255,255,255,.12); }
-        .wall-label { position:absolute; bottom:7px; left:12px; right:12px; text-align:center; color:#fff; font-size:11px; font-weight:900; letter-spacing:.12em; opacity:.8; }
-        @keyframes slotFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4px)} }
-        .silhouette { position:relative; z-index:2; width:190px; height:260px; filter: drop-shadow(0 8px 10px rgba(0,0,0,.2)); }
-        .silhouette__person { fill:#18121a; transition:.25s; }
-        .silhouette__body { opacity:.96; }
-        .silhouette__label { fill:#fff; font-size:14px; font-weight:900; letter-spacing:2px; opacity:.8; }
-        .wall-slot--target .silhouette__person { fill:#140f17; }
-        .wall-slot--target .silhouette { transform:scale(1.03); }
-        .target-banner { position:absolute; top:20px; left:50%; transform:translateX(-50%); z-index:10; padding:9px 16px; border-radius:999px; background:rgba(255,255,255,.93); color:#17131d; font-weight:900; box-shadow:0 10px 28px rgba(0,0,0,.18); }
-        .stage-center-line { position:absolute; left:50%; bottom:86px; transform:translateX(-50%); width:5px; height:150px; background:linear-gradient(180deg, transparent, rgba(255,255,255,.7), transparent); box-shadow:0 0 25px rgba(255,255,255,.25); }
-        .player-zone { position:absolute; left:50%; bottom:66px; transform:translateX(-50%); width:250px; text-align:center; color:white; z-index:9; }
-        .player-ring { width:150px; height:150px; margin:0 auto -12px; border:2px solid rgba(255,255,255,.5); border-radius:50%; box-shadow:0 0 0 14px rgba(255,255,255,.04), 0 0 40px rgba(255,255,255,.14); animation:ringPulse 1.35s ease-in-out infinite; }
-        @keyframes ringPulse { 0%,100%{transform:scale(.98);opacity:.65} 50%{transform:scale(1.03);opacity:1} }
-        .target-card { margin:0 auto; width:210px; padding:11px 14px; border-radius:18px; background:rgba(18,15,23,.78); backdrop-filter:blur(12px); border:1px solid rgba(255,255,255,.15); }
-        .target-card small { display:block; color:#bcb2c8; font-size:10px; font-weight:800; letter-spacing:.14em; }
-        .target-card strong { display:block; margin-top:3px; font-size:24px; color:white; }
-        .stage-overlay { position:absolute; inset:0; pointer-events:none; }
-        .message-pill { position:absolute; left:50%; bottom:20px; transform:translateX(-50%); min-width:290px; max-width:80%; padding:10px 15px; border-radius:999px; background:rgba(14,12,17,.78); color:white; text-align:center; font-weight:800; font-size:13px; backdrop-filter:blur(14px); z-index:15; }
-        .big-points { position:absolute; left:50%; top:46%; transform:translate(-50%,-50%); color:white; font-weight:1000; font-size:50px; text-shadow:0 8px 30px rgba(0,0,0,.3); z-index:30; animation:popPoints .7s ease forwards; }
-        @keyframes popPoints { 0%{opacity:0;transform:translate(-50%,-20%) scale(.6)} 20%{opacity:1;transform:translate(-50%,-50%) scale(1.06)} 100%{opacity:0;transform:translate(-50%,-90%) scale(1)} }
-        .game-over { position:absolute; inset:0; z-index:40; display:grid; place-items:center; background:rgba(11,8,16,.76); backdrop-filter:blur(10px); }
-        .game-over-card { text-align:center; width:min(440px,86%); padding:28px; border-radius:26px; color:white; background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); box-shadow:0 25px 80px rgba(0,0,0,.35); }
-        .game-over-card h3 { margin:0 0 8px; font-size:42px; letter-spacing:-.05em; }
-        .result-score { font-size:62px; font-weight:1000; margin:8px 0 18px; }
-        .legend { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-top:14px; }
-        .legend-item { display:flex; align-items:center; gap:7px; padding:9px 10px; border-radius:13px; background:rgba(255,255,255,.58); font-size:11px; font-weight:800; }
-        .legend-dot { width:9px; height:9px; border-radius:50%; flex:0 0 auto; }
-        .status-line { margin-top:12px; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; border-radius:14px; background:#fff; }
-        .status-dot { width:10px; height:10px; border-radius:50%; background:#9d96a9; }
-        .status-dot.success { background:#4CAF50; box-shadow:0 0 0 5px rgba(76,175,80,.13); }
-        .status-dot.danger { background:#ff477e; }
-        .status-text { font-size:12px; font-weight:800; color:#655e6e; }
-        .class-scores { margin-top:10px; display:grid; grid-template-columns:1fr 1fr; gap:6px; }
-        .class-score { padding:6px 8px; border-radius:8px; background:rgba(255,255,255,.5); font-size:11px; font-weight:700; display:flex; justify-content:space-between; }
-        .particle { position:absolute; border-radius:50%; pointer-events:none; z-index:25; }
-        @media (max-width: 980px) { .content { grid-template-columns:1fr; } .game-stage { min-height:560px; } }
-        @media (max-width: 620px) { .pose-game { padding:12px; } .topbar { flex-direction:column; align-items:stretch; } .stats { grid-template-columns:repeat(2,1fr); } .legend { grid-template-columns:repeat(2,1fr); } .wall-frame { height:300px; } .wall-slot { width:190px; } .silhouette { width:158px; height:220px; } .game-stage { min-height:520px; } }
+        button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        .btn-primary {
+          background: linear-gradient(135deg, #ff477e, #ff8a65);
+          color: #fff; box-shadow: 0 4px 20px rgba(255,71,126,0.35);
+        }
+        .btn-secondary {
+          background: rgba(255,255,255,0.1); color: #fff;
+          border: 1px solid rgba(255,255,255,0.15);
+        }
+
+        /* STATS */
+        .stats { display:grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 16px; }
+        .stat {
+          background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
+          border-radius: 16px; padding: 12px 14px; text-align: center;
+          backdrop-filter: blur(10px);
+        }
+        .stat small { display:block; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #7a6f8a; margin-bottom: 4px; }
+        .stat strong { font-size: 24px; font-weight: 900; letter-spacing: -0.03em; }
+        .stat.lives strong { color: #ff477e; }
+
+        /* CONTENT GRID */
+        .content { display:grid; grid-template-columns: 360px minmax(0,1fr); gap: 16px; }
+
+        /* PANELS */
+        .panel {
+          background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+          border-radius: 24px; padding: 16px; backdrop-filter: blur(16px);
+        }
+        .panel h2 { margin: 0 0 12px; font-size: 15px; font-weight: 800; color: #d4cde0; }
+
+        /* CAMERA */
+        .camera-frame { position: relative; overflow: hidden; border-radius: 20px; background: #0a0612; aspect-ratio: 1; border: 2px solid rgba(255,255,255,0.08); }
+        .camera-frame canvas { width: 100%; height: 100%; display: block; object-fit: cover; transform: scaleX(-1); }
+        .camera-badge { position: absolute; top: 10px; left: 10px; padding: 6px 10px; background: rgba(0,0,0,0.6); color: #fff; border-radius: 999px; font-size: 10px; font-weight: 800; backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.1); }
+        .camera-scanline { position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,200,0.03) 2px, rgba(0,255,200,0.03) 4px); animation: scanline 3s linear infinite; }
+        @keyframes scanline { 0%{ transform: translateY(0); } 100%{ transform: translateY(8px); } }
+
+        /* DETECT CARD */
+        .detect-card { margin-top: 12px; padding: 14px; border-radius: 18px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); }
+        .detect-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+        .pose-chip { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 999px; background: rgba(255,255,255,0.08); font-weight: 900; font-size: 14px; border: 1px solid rgba(255,255,255,0.1); }
+        .dot { width: 10px; height: 10px; border-radius: 999px; background: currentColor; box-shadow: 0 0 10px currentColor; }
+        .confidence { margin-top: 10px; height: 6px; background: rgba(255,255,255,0.08); border-radius: 999px; overflow: hidden; }
+        .confidence > i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #00e5ff, #ff477e, #76ff03, #ffab00); transition: width 0.2s ease; }
+
+        /* CLASS SCORES */
+        .class-scores { margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+        .class-score { padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,0.04); font-size: 12px; font-weight: 700; display: flex; justify-content: space-between; align-items: center; border: 1px solid transparent; transition: all 0.2s; }
+        .class-score.active { background: rgba(255,255,255,0.1); border-color: currentColor; }
+
+        /* STATUS */
+        .status-line { margin-top: 12px; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #5a5270; transition: all 0.3s; }
+        .status-dot.success { background: #00e676; box-shadow: 0 0 0 4px rgba(0,230,118,0.2); }
+        .status-dot.danger { background: #ff1744; box-shadow: 0 0 0 4px rgba(255,23,68,0.2); }
+        .status-text { font-size: 12px; font-weight: 800; color: #b0a8c0; }
+
+        /* GAME STAGE - 3D Perspective */
+        .game-stage-wrapper { position: relative; height: 600px; border-radius: 24px; overflow: hidden; border: 2px solid rgba(255,255,255,0.08); background: linear-gradient(180deg, #0f0818 0%, #1a0f2e 40%, #0d0418 100%); }
+        .game-stage { position: absolute; inset: 0; perspective: 800px; perspective-origin: 50% 40%; overflow: hidden; }
+        .stage-floor { position: absolute; bottom: 0; left: -20%; right: -20%; height: 35%; transform: rotateX(60deg); transform-origin: bottom; background: linear-gradient(180deg, rgba(124,77,255,0.1), transparent), repeating-linear-gradient(90deg, rgba(255,255,255,0.03) 0 1px, transparent 1px 60px); }
+        .stage-grid { position: absolute; inset: 0; background: linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px); background-size: 50px 50px; opacity: 0.5; }
+        .stage-fog { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 100%, transparent 30%, #0d0418 80%); pointer-events: none; }
+
+        /* WALL */
+        .wall-container { position: absolute; top: 50%; left: 50%; width: 320px; height: 420px; transform-style: preserve-3d; pointer-events: none; }
+        .wall-body {
+          position: absolute; inset: 0;
+          background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02));
+          border: 3px solid rgba(255,255,255,0.15);
+          border-radius: 24px;
+          backdrop-filter: blur(8px);
+          box-shadow: 0 0 60px rgba(0,0,0,0.5), inset 0 0 40px rgba(255,255,255,0.03);
+        }
+        .wall-body::before {
+          content: ''; position: absolute; inset: -3px; border-radius: 24px;
+          background: linear-gradient(135deg, var(--wall-glow, rgba(255,255,255,0.2)), transparent 60%);
+          opacity: 0.6; z-index: -1;
+        }
+        .wall-hole {
+          position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+          width: 160px; height: 260px;
+          background: radial-gradient(ellipse at center, rgba(0,0,0,0.9) 40%, rgba(0,0,0,0.6) 70%, transparent 100%);
+          border-radius: 80px;
+          box-shadow: inset 0 0 30px rgba(0,0,0,0.8), 0 0 20px var(--wall-glow, rgba(255,255,255,0.1));
+          display: grid; place-items: center;
+        }
+        .wall-hole svg { filter: drop-shadow(0 0 15px var(--wall-glow, rgba(255,255,255,0.3))); }
+        .wall-label {
+          position: absolute; bottom: 16px; left: 0; right: 0; text-align: center;
+          font-size: 13px; font-weight: 900; letter-spacing: 0.15em;
+          color: rgba(255,255,255,0.7); text-transform: uppercase;
+        }
+        .wall-lockon {
+          position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+          width: 200px; height: 300px; border: 2px dashed rgba(255,255,255,0.3);
+          border-radius: 100px; animation: lockonPulse 1s ease-in-out infinite;
+          pointer-events: none;
+        }
+        @keyframes lockonPulse { 0%,100%{ opacity: 0.3; transform: translate(-50%,-50%) scale(1); } 50%{ opacity: 0.7; transform: translate(-50%,-50%) scale(1.05); } }
+
+        /* PLAYER ZONE */
+        .player-zone { position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); text-align: center; z-index: 100; }
+        .player-ring {
+          width: 120px; height: 120px; margin: 0 auto 8px; border-radius: 50%;
+          border: 3px solid rgba(255,255,255,0.2);
+          box-shadow: 0 0 0 10px rgba(255,255,255,0.03), 0 0 40px rgba(255,255,255,0.1);
+          animation: playerPulse 2s ease-in-out infinite;
+          display: grid; place-items: center; font-size: 48px;
+        }
+        @keyframes playerPulse { 0%,100%{ transform: scale(0.95); opacity: 0.7; } 50%{ transform: scale(1.05); opacity: 1; } }
+        .target-hud {
+          padding: 10px 20px; border-radius: 16px;
+          background: rgba(0,0,0,0.5); backdrop-filter: blur(12px);
+          border: 1px solid rgba(255,255,255,0.1);
+        }
+        .target-hud small { display: block; font-size: 10px; font-weight: 800; color: #8a8098; letter-spacing: 0.15em; margin-bottom: 2px; }
+        .target-hud strong { font-size: 20px; font-weight: 900; }
+
+        /* PARTICLES */
+        .particle { position: absolute; border-radius: 50%; pointer-events: none; z-index: 200; }
+
+        /* POINTS POPUP */
+        .big-points { position: absolute; left: 50%; top: 40%; transform: translate(-50%,-50%); font-weight: 900; font-size: 56px; z-index: 300; animation: popPoints 0.8s ease forwards; text-shadow: 0 4px 30px rgba(0,0,0,0.5); }
+        @keyframes popPoints { 0%{ opacity: 0; transform: translate(-50%,-30%) scale(0.4); } 25%{ opacity: 1; transform: translate(-50%,-50%) scale(1.1); } 100%{ opacity: 0; transform: translate(-50%,-90%) scale(0.9); } }
+
+        /* COMBO */
+        .combo-display { position: absolute; top: 20px; right: 24px; z-index: 150; text-align: right; }
+        .combo-display .combo-count { font-size: 48px; font-weight: 900; line-height: 1; color: #ffab00; text-shadow: 0 0 30px rgba(255,171,0,0.4); }
+        .combo-display .combo-label { font-size: 12px; font-weight: 800; color: #ffab00; letter-spacing: 0.2em; }
+
+        /* MESSAGE */
+        .message-pill { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); padding: 10px 24px; border-radius: 999px; background: rgba(0,0,0,0.6); backdrop-filter: blur(14px); border: 1px solid rgba(255,255,255,0.1); font-weight: 800; font-size: 14px; z-index: 150; white-space: nowrap; }
+
+        /* GAME OVER */
+        .game-over { position: absolute; inset: 0; z-index: 400; display: grid; place-items: center; background: rgba(5,2,10,0.85); backdrop-filter: blur(16px); }
+        .game-over-card { text-align: center; width: min(420px, 90%); padding: 36px 28px; border-radius: 28px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 30px 80px rgba(0,0,0,0.5); }
+        .game-over-card h2 { margin: 0 0 8px; font-size: 40px; font-weight: 900; letter-spacing: -0.03em; background: linear-gradient(135deg, #ff477e, #ffab00); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .result-score { font-size: 64px; font-weight: 900; margin: 8px 0; color: #fff; text-shadow: 0 0 40px rgba(255,255,255,0.2); }
+        .game-over-stats { display: flex; justify-content: center; gap: 24px; margin: 16px 0 24px; color: #a89bb8; font-size: 14px; }
+
+        /* START SCREEN */
+        .start-screen { position: absolute; inset: 0; z-index: 500; display: grid; place-items: center; background: rgba(5,2,10,0.7); backdrop-filter: blur(20px); }
+        .start-card { text-align: center; width: min(480px, 90%); padding: 40px 32px; border-radius: 32px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); }
+        .start-card h2 { margin: 0 0 12px; font-size: 36px; font-weight: 900; }
+        .start-card p { color: #a89bb8; margin-bottom: 24px; line-height: 1.6; }
+        .pose-preview { display: flex; justify-content: center; gap: 16px; margin: 20px 0; flex-wrap: wrap; }
+        .pose-preview-item { padding: 12px 16px; border-radius: 14px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); text-align: center; }
+        .pose-preview-item .icon { font-size: 28px; margin-bottom: 4px; }
+        .pose-preview-item .name { font-size: 11px; font-weight: 800; color: #c4bcd4; }
+
+        /* LEGEND */
+        .legend { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
+        .legend-item { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); font-size: 12px; font-weight: 700; }
+        .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+        /* LIVES */
+        .lives-display { position: absolute; top: 20px; left: 24px; z-index: 150; display: flex; gap: 6px; }
+        .life-heart { font-size: 24px; filter: drop-shadow(0 0 8px rgba(255,71,126,0.4)); transition: all 0.3s; }
+        .life-heart.lost { opacity: 0.2; filter: grayscale(1); }
+
+        /* RESPONSIVE */
+        @media (max-width: 980px) { .content { grid-template-columns: 1fr; } .game-stage-wrapper { height: 500px; } .stats { grid-template-columns: repeat(3, 1fr); } }
+        @media (max-width: 620px) { .pose-game { padding: 12px; } .topbar { flex-direction: column; align-items: stretch; } .stats { grid-template-columns: repeat(2, 1fr); } .game-stage-wrapper { height: 450px; } .wall-container { width: 260px; height: 340px; } .wall-hole { width: 130px; height: 210px; } }
       `}</style>
 
       <div className="shell">
@@ -786,25 +870,15 @@ export default function PoseWallGame() {
           <div className="brand">
             <div className="logo">🧱</div>
             <div>
-              <h1>กำแพงซ่า - Pose Challenge</h1>
-              <p className="subtitle">เกมเลียนแบบท่าจากกำแพง ด้วย AI Pose Detection</p>
+              <h1>Hole in the Wall AI</h1>
+              <p>ทำท่าให้ตรงกับช่องว่างในกำแพง!</p>
             </div>
           </div>
           <div className="controls">
-            <button
-              className="btn-primary"
-              type="button"
-              onClick={startGame}
-              disabled={loading || running}
-            >
-              {loading ? '⏳ กำลังโหลด AI…' : running ? '🎮 กำลังเล่น' : '🎮 เริ่มเกม'}
+            <button className="btn-primary" onClick={startGame} disabled={loading || running}>
+              {loading ? '⏳ โหลด AI...' : running ? '🎮 เล่นอยู่' : '🎮 เริ่มเกม'}
             </button>
-            <button
-              className="btn-secondary"
-              type="button"
-              onClick={restartGame}
-              disabled={!ready}
-            >
+            <button className="btn-secondary" onClick={() => { resetGame(); setRunning(true); }} disabled={!ready || running}>
               🔄 เริ่มใหม่
             </button>
           </div>
@@ -818,47 +892,52 @@ export default function PoseWallGame() {
           </div>
           <div className="stat">
             <small>Combo</small>
-            <strong>×{combo}</strong>
+            <strong style={{ color: combo > 2 ? '#ffab00' : '#fff' }}>×{combo}</strong>
           </div>
           <div className="stat">
             <small>Time</small>
-            <strong>{timeLeft}s</strong>
+            <strong style={{ color: timeLeft <= 10 ? '#ff1744' : '#fff' }}>{timeLeft}s</strong>
           </div>
           <div className="stat">
             <small>Target</small>
-            <strong>
-              {targetInfo.icon} {targetInfo.short}
+            <strong style={{ color: targetInfo?.color || '#fff' }}>
+              {targetInfo ? `${targetInfo.icon} ${targetInfo.short}` : '---'}
             </strong>
+          </div>
+          <div className="stat lives">
+            <small>Lives</small>
+            <strong>{'❤️'.repeat(lives)}{'🖤'.repeat(3 - lives)}</strong>
           </div>
         </section>
 
-        {/* MAIN CONTENT */}
+        {/* MAIN */}
         <main className="content">
-          {/* LEFT: CAMERA PANEL */}
+          {/* CAMERA PANEL */}
           <aside className="panel">
-            <h2>📷 กล้องตรวจจับท่าทาง</h2>
+            <h2>📷 กล้อง AI</h2>
             <div className="camera-frame">
               <canvas ref={canvasRef} />
-              <div className="camera-badge">AI CAMERA</div>
+              <div className="camera-badge">● LIVE</div>
+              <div className="camera-scanline" />
             </div>
 
             <div className="detect-card">
               <div className="detect-row">
                 <div>
-                  <div style={{ fontSize: 11, color: '#82798c', fontWeight: 800 }}>ตรวจพบ</div>
-                  <div className="pose-chip">
-                    <span className="dot" style={{ color: detectedInfo?.accent ?? '#9d96a9' }} />
-                    {detectedInfo?.label ?? 'ยังไม่พบ'}
+                  <div style={{ fontSize: 10, color: '#7a6f8a', fontWeight: 800, marginBottom: 4 }}>ตรวจพบ</div>
+                  <div className="pose-chip" style={{ borderColor: detectedInfo?.color || 'rgba(255,255,255,0.1)' }}>
+                    <span className="dot" style={{ color: detectedInfo?.color || '#5a5270' }} />
+                    {detectedInfo?.label || 'รอการตรวจจับ...'}
                   </div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: 11, color: '#82798c', fontWeight: 800 }}>Confidence</div>
-                  <strong style={{ fontSize: 20 }}>{Math.round(confidence * 100)}%</strong>
+                  <div style={{ fontSize: 10, color: '#7a6f8a', fontWeight: 800, marginBottom: 4 }}>Confidence</div>
+                  <strong style={{ fontSize: 22, color: confidence >= CONFIDENCE_LIMIT ? '#00e676' : '#fff' }}>
+                    {Math.round(confidence * 100)}%
+                  </strong>
                 </div>
               </div>
-              <div className="confidence">
-                <i style={{ width: `${Math.min(confidence * 100, 100)}%` }} />
-              </div>
+              <div className="confidence"><i style={{ width: `${Math.min(confidence * 100, 100)}%` }} /></div>
             </div>
 
             <div className="status-line">
@@ -866,144 +945,172 @@ export default function PoseWallGame() {
               <span className="status-text">{message}</span>
             </div>
 
-            {/* Class Scores — อ่านค่าจริงจาก classScores ผ่านตาราง poseToLabelRef ที่จับคู่ไว้ตอนโหลดโมเดล */}
             <div className="class-scores">
               {POSE_ORDER.map((key) => {
                 const realLabel = poseToLabelRef.current[key];
                 const prob = realLabel ? classScores[realLabel] ?? 0 : 0;
+                const isActive = detectedPose === key;
                 return (
-                  <div
-                    key={key}
-                    className="class-score"
-                    style={{
-                      background: detectedPose === key ? `${POSES[key].color}30` : 'rgba(255,255,255,.5)',
-                      border:
-                        detectedPose === key ? `2px solid ${POSES[key].color}` : '2px solid transparent',
-                    }}
-                  >
-                    <span>
-                      {POSES[key].icon} {POSES[key].label}
-                    </span>
+                  <div key={key} className={`class-score ${isActive ? 'active' : ''}`} style={{ color: POSES[key].color, borderColor: isActive ? POSES[key].color : 'transparent' }}>
+                    <span>{POSES[key].icon} {POSES[key].label}</span>
                     <span>{(prob * 100).toFixed(0)}%</span>
                   </div>
                 );
               })}
             </div>
 
-            <div className="model-note">
-              <strong>4 ท่าที่ใช้ในเกม</strong>
-              <br />
-              🙌 ยกสองมือ · 🤾 เอียงข้าง · 🦩 ยกขาข้างเดียว · 🌳 ท่าต้นไม้
-              <br />
-              <br />
-              ความมั่นใจขั้นต่ำ: {Math.round(CONFIDENCE_LIMIT * 100)}%
-              {modelClasses.length > 0 && (
-                <>
-                  <br />
-                  class จากโมเดล ({modelClasses.length}): {modelClasses.join(', ')}
-                </>
-              )}
+            <div style={{ marginTop: 12, padding: 12, borderRadius: 12, background: 'rgba(255,255,255,0.03)', fontSize: 12, color: '#8a8098', lineHeight: 1.6 }}>
+              <strong style={{ color: '#d4cde0' }}>วิธีเล่น:</strong><br />
+              กำแพงจะเคลื่อนที่เข้ามา ให้ทำท่าตรงกับช่องว่างตอนกำแพงถึงเส้น<br />
+              ทำถูก = ทะลุผ่าน + คะแนน | ทำผิด = ชน! 💥
             </div>
           </aside>
 
-          {/* RIGHT: GAME PANEL */}
-          <section className="panel game-panel">
-            <h2>🎮 กำแพงท่าโพส</h2>
-            <div className="game-stage">
-              <div className="stage-lights" />
-              <div className="floor" />
+          {/* GAME PANEL */}
+          <section className="panel" style={{ padding: 0, overflow: 'hidden' }}>
+            <div className="game-stage-wrapper">
+              <div className="game-stage">
+                <div className="stage-grid" />
+                <div className="stage-floor" />
+                <div className="stage-fog" />
 
-              {/* WALLS */}
-              <div className="wall-area">
-                <div className="wall-frame">
-                  <div className="wall-grid" />
-                  <div className="target-banner">ทำตามท่าที่กำลังเข้าจุดกลาง</div>
-                  <div className="wall-holes">
-                    {wallSlots.map((slot) => {
-                      const isTarget =
-                        slot.pose === targetPose && Math.abs(slot.x - CENTER_X) < HIT_ZONE;
-                      return (
-                        <div
-                          key={slot.id}
-                          className={`wall-slot ${isTarget ? 'wall-slot--target' : ''}`}
-                          style={wallStyle(slot.x)}
-                        >
-                          <Silhouette pose={slot.pose} active={isTarget} />
-                          <div className="wall-label">{POSES[slot.pose].label}</div>
+                {/* WALLS */}
+                {walls.map((wall) => {
+                  const info = POSES[wall.pose];
+                  const isLock = wall.state === 'lock';
+                  const isMiss = wall.state === 'miss';
+                  return (
+                    <div
+                      key={wall.id}
+                      className="wall-container"
+                      style={getWallTransform(wall)}
+                    >
+                      <div
+                        className="wall-body"
+                        style={{
+                          '--wall-glow': isMiss ? 'rgba(255,23,68,0.5)' : info.glow,
+                          borderColor: isMiss ? 'rgba(255,23,68,0.6)' : isLock ? info.color : 'rgba(255,255,255,0.15)',
+                          boxShadow: isLock
+                            ? `0 0 80px ${info.glow}, inset 0 0 40px rgba(255,255,255,0.05)`
+                            : '0 0 60px rgba(0,0,0,0.5), inset 0 0 40px rgba(255,255,255,0.03)',
+                        } as CSSProperties}
+                      >
+                        <div className="wall-hole" style={{ '--wall-glow': info.glow } as CSSProperties}>
+                          <Silhouette pose={wall.pose} size={140} />
                         </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-
-              {/* CENTER LINE */}
-              <div className="stage-center-line" />
-
-              {/* PLAYER ZONE */}
-              <div className="player-zone">
-                <div className="player-ring" />
-                <div className="target-card">
-                  <small>ท่าที่ต้องทำ</small>
-                  <strong>
-                    {targetInfo.icon} {targetInfo.label}
-                  </strong>
-                </div>
-              </div>
-
-              {/* PARTICLES */}
-              {particlesRef.current.map((p) => (
-                <div
-                  key={p.id}
-                  className="particle"
-                  style={{
-                    left: p.x,
-                    top: p.y,
-                    width: p.size,
-                    height: p.size,
-                    background: p.color,
-                    opacity: p.life,
-                    transform: 'translate(-50%, -50%)',
-                  }}
-                />
-              ))}
-
-              {/* POINTS POPUP */}
-              {lastPoints !== null && (
-                <div key={`${lastPoints}-${score}`} className="big-points">
-                  +{lastPoints}
-                </div>
-              )}
-
-              {/* MESSAGE PILL */}
-              {!gameOver && <div className="message-pill">{message}</div>}
-
-              {/* GAME OVER OVERLAY */}
-              {gameOver && (
-                <div className="game-over">
-                  <div className="game-over-card">
-                    <h3>GAME OVER</h3>
-                    <div style={{ opacity: 0.7, fontWeight: 700 }}>คะแนนรวม</div>
-                    <div className="result-score">{score.toLocaleString()}</div>
-                    <div style={{ marginBottom: 18, opacity: 0.78 }}>
-                      ทำสำเร็จ {matchedRef.current} ครั้ง · คอมโบสูงสุด ×{combo}
+                        <div className="wall-label" style={{ color: info.color }}>{info.label}</div>
+                        {isLock && <div className="wall-lockon" style={{ borderColor: info.color }} />}
+                      </div>
                     </div>
-                    <button className="btn-primary" type="button" onClick={restartGame}>
-                      เล่นอีกครั้ง
-                    </button>
+                  );
+                })}
+
+                {/* PLAYER ZONE */}
+                <div className="player-zone">
+                  <div className="player-ring">
+                    {detectedInfo?.icon || '🧍'}
+                  </div>
+                  <div className="target-hud">
+                    <small>ท่าปัจจุบัน</small>
+                    <strong style={{ color: targetInfo?.color || '#fff' }}>
+                      {targetInfo ? `${targetInfo.icon} ${targetInfo.label}` : 'รอ...'}
+                    </strong>
                   </div>
                 </div>
-              )}
+
+                {/* PARTICLES */}
+                {particlesRef.current.map((p) => (
+                  <div
+                    key={p.id}
+                    className="particle"
+                    style={{
+                      left: `${p.x}%`,
+                      top: `${p.y}%`,
+                      width: p.size,
+                      height: p.size,
+                      background: p.color,
+                      opacity: p.life,
+                      boxShadow: `0 0 ${p.size * 2}px ${p.color}`,
+                      transform: `translate(-50%, -50%)`,
+                    }}
+                  />
+                ))}
+
+                {/* COMBO */}
+                {combo > 1 && (
+                  <div className="combo-display">
+                    <div className="combo-count">{combo}</div>
+                    <div className="combo-label">COMBO</div>
+                  </div>
+                )}
+
+                {/* POINTS */}
+                {lastPoints !== null && (
+                  <div key={`${lastPoints}-${score}`} className="big-points" style={{ color: POSES[targetPose || 'Two hand']?.color || '#fff' }}>
+                    +{lastPoints}
+                  </div>
+                )}
+
+                {/* MESSAGE */}
+                {!gameOver && <div className="message-pill">{message}</div>}
+
+                {/* LIVES */}
+                <div className="lives-display">
+                  {[0, 1, 2].map((i) => (
+                    <span key={i} className={`life-heart ${i >= lives ? 'lost' : ''}`}>❤️</span>
+                  ))}
+                </div>
+
+                {/* START SCREEN */}
+                {showStartScreen && !loading && (
+                  <div className="start-screen">
+                    <div className="start-card">
+                      <h2>🧱 Hole in the Wall</h2>
+                      <p>ทำท่าทางให้ตรงกับช่องว่างในกำแพงที่กำลังเข้ามา!<br />ใช้กล้องและ AI ตรวจจับท่าทางของคุณ</p>
+                      <div className="pose-preview">
+                        {POSE_ORDER.map((key) => (
+                          <div key={key} className="pose-preview-item">
+                            <div className="icon">{POSES[key].icon}</div>
+                            <div className="name">{POSES[key].label}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <button className="btn-primary" onClick={startGame} style={{ fontSize: 18, padding: '14px 36px' }}>
+                        ▶ เริ่มเล่น
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* GAME OVER */}
+                {gameOver && (
+                  <div className="game-over">
+                    <div className="game-over-card">
+                      <h2>GAME OVER</h2>
+                      <div className="result-score">{score.toLocaleString()}</div>
+                      <div className="game-over-stats">
+                        <span>✅ สำเร็จ {matchedRef.current} ครั้ง</span>
+                        <span>🔥 Combo สูงสุด ×{combo}</span>
+                      </div>
+                      <button className="btn-primary" onClick={() => { resetGame(); setRunning(true); }}>
+                        ▶ เล่นอีกครั้ง
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* LEGEND */}
-            <div className="legend">
-              {POSE_ORDER.map((key) => (
-                <div className="legend-item" key={key}>
-                  <span className="legend-dot" style={{ background: POSES[key].accent }} />
-                  {POSES[key].icon} {POSES[key].label}
-                </div>
-              ))}
+            <div style={{ padding: 16 }}>
+              <div className="legend">
+                {POSE_ORDER.map((key) => (
+                  <div key={key} className="legend-item">
+                    <span className="legend-dot" style={{ background: POSES[key].color, boxShadow: `0 0 10px ${POSES[key].color}` }} />
+                    <span>{POSES[key].icon} {POSES[key].label}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </section>
         </main>
