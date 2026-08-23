@@ -1,7 +1,16 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
+import {
+  POSES,
+  POSE_ORDER,
+  Silhouette,
+  buildLabelMap,
+  matchModelLabel,
+  randomPose,
+} from './poseData';
+import type { PoseKey } from './poseData';
 
 // ============================================
 // TYPES
@@ -11,21 +20,6 @@ declare global {
     tmPose: any;
     tf: any;
   }
-}
-
-type PoseKey = 'Two hand' | 'one side' | 'one leg up' | 'tree';
-// type GamePhase = 'idle' | 'loading' | 'ready' | 'playing' | 'gameover';
-
-interface PoseInfo {
-  key: PoseKey;
-  label: string;
-  short: string;
-  aliases: string[];
-  points: number;
-  accent: string;
-  icon: string;
-  color: string;
-  glow: string;
 }
 
 interface Wall {
@@ -62,98 +56,6 @@ const WALL_PASS_Z = 85;            // จุดทะลุผ่าน
 const WALL_DESPAWN_Z = 110;        // จุดหายไป
 const SPAWN_INTERVAL = 280;        // ระยะเฟรมระหว่างกำแพง
 
-const POSES: Record<PoseKey, PoseInfo> = {
-  'Two hand': {
-    key: 'Two hand',
-    label: 'ยกสองมือ',
-    short: 'TWO HAND',
-    aliases: ['two hand', 'two hands', 'สองมือ', 'ยกสองมือ', 'class 1', 'pose1', 'pose 1'],
-    points: 100,
-    accent: '#00e5ff',
-    icon: '🙌',
-    color: '#00e5ff',
-    glow: 'rgba(0,229,255,0.4)',
-  },
-  'one side': {
-    key: 'one side',
-    label: 'เอียงข้าง',
-    short: 'ONE SIDE',
-    aliases: ['one side', 'oneside', 'ข้างเดียว', 'เอียงข้าง', 'class 2', 'pose2', 'pose 2'],
-    points: 150,
-    accent: '#ff477e',
-    icon: '🤾',
-    color: '#ff477e',
-    glow: 'rgba(255,71,126,0.4)',
-  },
-  'one leg up': {
-    key: 'one leg up',
-    label: 'ยกขาข้างเดียว',
-    short: 'LEG UP',
-    aliases: ['one leg up', 'oneleg up', 'one leg', 'ขาเดียว', 'ยกขาข้างเดียว', 'class 3', 'pose3', 'pose 3'],
-    points: 150,
-    accent: '#76ff03',
-    icon: '🦩',
-    color: '#76ff03',
-    glow: 'rgba(118,255,3,0.4)',
-  },
-  tree: {
-    key: 'tree',
-    label: 'ท่าต้นไม้',
-    short: 'TREE',
-    aliases: ['tree', 'tree pose', 'ต้นไม้', 'ท่าต้นไม้', 'class 4', 'pose4', 'pose 4'],
-    points: 150,
-    accent: '#ffab00',
-    icon: '🌳',
-    color: '#ffab00',
-    glow: 'rgba(255,171,0,0.4)',
-  },
-};
-
-const POSE_ORDER: PoseKey[] = ['Two hand', 'one side', 'one leg up', 'tree'];
-
-// ============================================
-// HELPERS
-// ============================================
-function normalizeLabel(value: string) {
-  return value.trim().toLowerCase().replace(/[_-]+/g, ' ');
-}
-
-function matchModelLabel(label: string): PoseKey | null {
-  const normalized = normalizeLabel(label);
-  for (const poseKey of POSE_ORDER) {
-    const pose = POSES[poseKey];
-    if (pose.aliases.some((alias) => normalized === normalizeLabel(alias))) {
-      return poseKey;
-    }
-  }
-  return null;
-}
-
-function buildLabelMap(labels: string[]): Record<string, PoseKey> {
-  const map: Record<string, PoseKey> = {};
-  const used = new Set<PoseKey>();
-  labels.forEach((label) => {
-    const matched = matchModelLabel(label);
-    if (matched && !used.has(matched)) {
-      map[label] = matched;
-      used.add(matched);
-    }
-  });
-  const remaining = POSE_ORDER.filter((k) => !used.has(k));
-  let cursor = 0;
-  labels.forEach((label) => {
-    if (!map[label] && cursor < remaining.length) {
-      map[label] = remaining[cursor++];
-    }
-  });
-  return map;
-}
-
-function randomPose(prev?: PoseKey): PoseKey {
-  const c = POSE_ORDER.filter((k) => k !== prev);
-  return c[Math.floor(Math.random() * c.length)];
-}
-
 function createWall(id: number, pose: PoseKey): Wall {
   return {
     id,
@@ -166,60 +68,13 @@ function createWall(id: number, pose: PoseKey): Wall {
 }
 
 // ============================================
-// SILHOUETTE SVG PATHS
-// ============================================
-const SILHOUETTE_PATHS: Record<PoseKey, string[]> = {
-  'Two hand': [
-    'M80 30 C65 30 55 40 55 55 C55 70 65 80 80 80 C95 80 105 70 105 55 C105 40 95 30 80 30 Z',
-    'M80 80 L80 130',
-    'M80 90 L50 60 L40 30',
-    'M80 90 L110 60 L120 30',
-    'M80 130 L60 180 L50 180',
-    'M80 130 L100 180 L110 180',
-  ],
-  'one side': [
-    'M80 35 C68 35 60 45 60 58 C60 70 68 78 80 78 C92 78 100 70 100 58 C100 45 92 35 80 35 Z',
-    'M80 78 L80 125',
-    'M80 85 L45 70 L30 50',
-    'M80 85 L115 90 L130 85',
-    'M80 125 L70 175 L60 175',
-    'M80 125 L95 170 L105 170',
-  ],
-  'one leg up': [
-    'M80 32 C68 32 58 42 58 55 C58 68 68 76 80 76 C92 76 102 68 102 55 C102 42 92 32 80 32 Z',
-    'M80 76 L80 120',
-    'M80 85 L55 95 L45 85',
-    'M80 85 L105 95 L115 85',
-    'M80 120 L75 175 L65 175',
-    'M80 120 L110 150 L120 140',
-  ],
-  tree: [
-    'M80 30 C68 30 60 40 60 52 C60 64 68 72 80 72 C92 72 100 64 100 52 C100 40 92 30 80 30 Z',
-    'M80 72 L80 118',
-    'M80 80 L55 55 L45 35',
-    'M80 80 L105 55 L115 35',
-    'M80 118 L70 178 L60 178',
-    'M80 118 L105 155 L115 145',
-  ],
-};
-
-function Silhouette({ pose, size = 200 }: { pose: PoseKey; size?: number }) {
-  const paths = SILHOUETTE_PATHS[pose];
-  return (
-    <svg width={size} height={size * 1.3} viewBox="0 0 160 210" style={{ display: 'block' }}>
-      <g fill="none" stroke={POSES[pose].color} strokeWidth="5" strokeLinecap="round" strokeLinejoin="round">
-        {paths.map((d, i) => (
-          <path key={i} d={d} />
-        ))}
-      </g>
-    </svg>
-  );
-}
-
-// ============================================
 // MAIN COMPONENT
 // ============================================
-export default function PoseMiiPlus() {
+interface PoseWallGameProps {
+  onExit?: () => void;
+}
+
+export default function PoseWallGame({ onExit }: PoseWallGameProps) {
   // Refs
   const webcamRef = useRef<any>(null);
   const modelRef = useRef<any>(null);
@@ -657,20 +512,37 @@ export default function PoseMiiPlus() {
   return (
     <div className={`pose-game ${flash ? 'pose-game--flash' : ''}`}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
         .pose-game, .pose-game * { box-sizing: border-box; }
         .pose-game {
           min-height: 100vh;
           padding: 20px;
           color: #fff;
-          background: radial-gradient(ellipse at 50% 0%, #1a0b2e 0%, #0d0418 50%, #05010a 100%);
+          background: radial-gradient(ellipse at 50% 0%, #0d1330 0%, #080c1c 50%, #05070d 100%);
           font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
           overflow-x: hidden;
+          position: relative;
         }
+        .pose-game::before {
+          content: '';
+          position: fixed; inset: 0; pointer-events: none; z-index: 0;
+          background-image:
+            radial-gradient(1.5px 1.5px at 12% 18%, rgba(255,255,255,0.6), transparent),
+            radial-gradient(1.5px 1.5px at 78% 8%, rgba(160,190,255,0.55), transparent),
+            radial-gradient(1px 1px at 55% 60%, rgba(255,255,255,0.45), transparent),
+            radial-gradient(1.5px 1.5px at 25% 82%, rgba(160,190,255,0.45), transparent),
+            radial-gradient(1px 1px at 92% 55%, rgba(255,255,255,0.4), transparent),
+            radial-gradient(1.5px 1.5px at 42% 38%, rgba(255,255,255,0.35), transparent);
+          background-repeat: repeat;
+          background-size: 700px 700px;
+          animation: starDrift 60s linear infinite;
+          opacity: 0.6;
+        }
+        @keyframes starDrift { from { background-position: 0 0; } to { background-position: -700px 700px; } }
         .pose-game--flash { animation: screenFlash .3s ease; }
         @keyframes screenFlash { 0%,100%{ filter: brightness(1) saturate(1); } 50%{ filter: brightness(1.6) saturate(1.3); } }
 
-        .shell { max-width: 1280px; margin: 0 auto; }
+        .shell { max-width: 1280px; margin: 0 auto; position: relative; z-index: 1; }
 
         /* HEADER */
         .topbar {
@@ -682,12 +554,12 @@ export default function PoseMiiPlus() {
         .brand { display:flex; gap: 12px; align-items:center; }
         .logo {
           width: 44px; height: 44px; border-radius: 14px;
-          background: linear-gradient(135deg, #ff477e, #7c4dff);
+          background: linear-gradient(135deg, #5b8cff, #1d3a8f);
           display: grid; place-items: center; font-size: 22px;
-          box-shadow: 0 0 20px rgba(255,71,126,0.3);
+          box-shadow: 0 0 20px rgba(91,140,255,0.35);
         }
-        .brand h1 { margin:0; font-size: 24px; font-weight: 900; letter-spacing: -0.02em; }
-        .brand p { margin: 2px 0 0; color: #a89bb8; font-size: 13px; }
+        .brand h1 { margin:0; font-size: 24px; font-weight: 800; letter-spacing: -0.01em; background: linear-gradient(135deg, #ffffff, #9fc0ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .brand p { margin: 2px 0 0; color: #93a0bc; font-size: 13px; }
         .controls { display:flex; gap:10px; }
         button {
           border: none; cursor: pointer; border-radius: 12px; padding: 10px 20px;
@@ -697,8 +569,8 @@ export default function PoseMiiPlus() {
         button:hover { transform: translateY(-2px); }
         button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
         .btn-primary {
-          background: linear-gradient(135deg, #ff477e, #ff8a65);
-          color: #fff; box-shadow: 0 4px 20px rgba(255,71,126,0.35);
+          background: linear-gradient(135deg, #3b63ff, #5b8cff);
+          color: #fff; box-shadow: 0 4px 20px rgba(91,140,255,0.4);
         }
         .btn-secondary {
           background: rgba(255,255,255,0.1); color: #fff;
@@ -712,9 +584,9 @@ export default function PoseMiiPlus() {
           border-radius: 16px; padding: 12px 14px; text-align: center;
           backdrop-filter: blur(10px);
         }
-        .stat small { display:block; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #7a6f8a; margin-bottom: 4px; }
+        .stat small { display:block; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #6f7aa0; margin-bottom: 4px; }
         .stat strong { font-size: 24px; font-weight: 900; letter-spacing: -0.03em; }
-        .stat.lives strong { color: #ff477e; }
+        .stat.lives strong { color: #ff5470; }
 
         /* CONTENT GRID */
         .content { display:grid; grid-template-columns: 360px minmax(0,1fr); gap: 16px; }
@@ -724,13 +596,13 @@ export default function PoseMiiPlus() {
           background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
           border-radius: 24px; padding: 16px; backdrop-filter: blur(16px);
         }
-        .panel h2 { margin: 0 0 12px; font-size: 15px; font-weight: 800; color: #d4cde0; }
+        .panel h2 { margin: 0 0 12px; font-size: 15px; font-weight: 800; color: #b9c4e0; }
 
         /* CAMERA */
-        .camera-frame { position: relative; overflow: hidden; border-radius: 20px; background: #0a0612; aspect-ratio: 1; border: 2px solid rgba(255,255,255,0.08); }
+        .camera-frame { position: relative; overflow: hidden; border-radius: 20px; background: #06080f; aspect-ratio: 1; border: 2px solid rgba(255,255,255,0.08); }
         .camera-frame canvas { width: 100%; height: 100%; display: block; object-fit: cover; transform: scaleX(-1); }
         .camera-badge { position: absolute; top: 10px; left: 10px; padding: 6px 10px; background: rgba(0,0,0,0.6); color: #fff; border-radius: 999px; font-size: 10px; font-weight: 800; backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.1); }
-        .camera-scanline { position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,200,0.03) 2px, rgba(0,255,200,0.03) 4px); animation: scanline 3s linear infinite; }
+        .camera-scanline { position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(91,140,255,0.04) 2px, rgba(91,140,255,0.04) 4px); animation: scanline 3s linear infinite; }
         @keyframes scanline { 0%{ transform: translateY(0); } 100%{ transform: translateY(8px); } }
 
         /* DETECT CARD */
@@ -751,14 +623,14 @@ export default function PoseMiiPlus() {
         .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #5a5270; transition: all 0.3s; }
         .status-dot.success { background: #00e676; box-shadow: 0 0 0 4px rgba(0,230,118,0.2); }
         .status-dot.danger { background: #ff1744; box-shadow: 0 0 0 4px rgba(255,23,68,0.2); }
-        .status-text { font-size: 12px; font-weight: 800; color: #b0a8c0; }
+        .status-text { font-size: 12px; font-weight: 800; color: #9aa5c4; }
 
         /* GAME STAGE - 3D Perspective */
-        .game-stage-wrapper { position: relative; height: 600px; border-radius: 24px; overflow: hidden; border: 2px solid rgba(255,255,255,0.08); background: linear-gradient(180deg, #0f0818 0%, #1a0f2e 40%, #0d0418 100%); }
+        .game-stage-wrapper { position: relative; height: 600px; border-radius: 24px; overflow: hidden; border: 2px solid rgba(255,255,255,0.08); background: linear-gradient(180deg, #080c1c 0%, #0d1330 40%, #05070d 100%); }
         .game-stage { position: absolute; inset: 0; perspective: 800px; perspective-origin: 50% 40%; overflow: hidden; }
-        .stage-floor { position: absolute; bottom: 0; left: -20%; right: -20%; height: 35%; transform: rotateX(60deg); transform-origin: bottom; background: linear-gradient(180deg, rgba(124,77,255,0.1), transparent), repeating-linear-gradient(90deg, rgba(255,255,255,0.03) 0 1px, transparent 1px 60px); }
+        .stage-floor { position: absolute; bottom: 0; left: -20%; right: -20%; height: 35%; transform: rotateX(60deg); transform-origin: bottom; background: linear-gradient(180deg, rgba(91,140,255,0.12), transparent), repeating-linear-gradient(90deg, rgba(255,255,255,0.03) 0 1px, transparent 1px 60px); }
         .stage-grid { position: absolute; inset: 0; background: linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px); background-size: 50px 50px; opacity: 0.5; }
-        .stage-fog { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 100%, transparent 30%, #0d0418 80%); pointer-events: none; }
+        .stage-fog { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 100%, transparent 30%, #05070d 80%); pointer-events: none; }
 
         /* WALL */
         .wall-container { position: absolute; top: 50%; left: 50%; width: 320px; height: 420px; transform-style: preserve-3d; pointer-events: none; }
@@ -784,6 +656,20 @@ export default function PoseMiiPlus() {
           display: grid; place-items: center;
         }
         .wall-hole svg { filter: drop-shadow(0 0 15px var(--wall-glow, rgba(255,255,255,0.3))); }
+        .wall-rune-ring {
+          position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+          width: 190px; height: 290px; border-radius: 100px;
+          background: conic-gradient(from 0deg, transparent 0 20deg, var(--wall-glow, rgba(255,255,255,0.3)) 30deg, transparent 55deg, transparent 90deg, var(--wall-glow, rgba(255,255,255,0.3)) 100deg, transparent 125deg, transparent 160deg, var(--wall-glow, rgba(255,255,255,0.3)) 170deg, transparent 195deg, transparent 230deg, var(--wall-glow, rgba(255,255,255,0.3)) 240deg, transparent 265deg, transparent 300deg, var(--wall-glow, rgba(255,255,255,0.3)) 310deg, transparent 335deg);
+          -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+          mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+          animation: runeSpin 8s linear infinite;
+          opacity: 0.85; pointer-events: none;
+        }
+        @keyframes runeSpin { from { transform: translate(-50%, -50%) rotate(0deg); } to { transform: translate(-50%, -50%) rotate(360deg); } }
+        .wall-spell-tag {
+          position: absolute; top: 14px; left: 0; right: 0; text-align: center;
+          font-size: 11px; font-weight: 800; letter-spacing: 0.1em;
+        }
         .wall-label {
           position: absolute; bottom: 16px; left: 0; right: 0; text-align: center;
           font-size: 13px; font-weight: 900; letter-spacing: 0.15em;
@@ -812,7 +698,7 @@ export default function PoseMiiPlus() {
           background: rgba(0,0,0,0.5); backdrop-filter: blur(12px);
           border: 1px solid rgba(255,255,255,0.1);
         }
-        .target-hud small { display: block; font-size: 10px; font-weight: 800; color: #8a8098; letter-spacing: 0.15em; margin-bottom: 2px; }
+        .target-hud small { display: block; font-size: 10px; font-weight: 800; color: #8a93ab; letter-spacing: 0.15em; margin-bottom: 2px; }
         .target-hud strong { font-size: 20px; font-weight: 900; }
 
         /* PARTICLES */
@@ -824,28 +710,28 @@ export default function PoseMiiPlus() {
 
         /* COMBO */
         .combo-display { position: absolute; top: 20px; right: 24px; z-index: 150; text-align: right; }
-        .combo-display .combo-count { font-size: 48px; font-weight: 900; line-height: 1; color: #ffab00; text-shadow: 0 0 30px rgba(255,171,0,0.4); }
-        .combo-display .combo-label { font-size: 12px; font-weight: 800; color: #ffab00; letter-spacing: 0.2em; }
+        .combo-display .combo-count { font-size: 48px; font-weight: 900; line-height: 1; color: #7fb0ff; text-shadow: 0 0 30px rgba(91,140,255,0.5); }
+        .combo-display .combo-label { font-size: 12px; font-weight: 800; color: #7fb0ff; letter-spacing: 0.2em; }
 
         /* MESSAGE */
         .message-pill { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); padding: 10px 24px; border-radius: 999px; background: rgba(0,0,0,0.6); backdrop-filter: blur(14px); border: 1px solid rgba(255,255,255,0.1); font-weight: 800; font-size: 14px; z-index: 150; white-space: nowrap; }
 
         /* GAME OVER */
-        .game-over { position: absolute; inset: 0; z-index: 400; display: grid; place-items: center; background: rgba(5,2,10,0.85); backdrop-filter: blur(16px); }
+        .game-over { position: absolute; inset: 0; z-index: 400; display: grid; place-items: center; background: rgba(5,7,13,0.85); backdrop-filter: blur(16px); }
         .game-over-card { text-align: center; width: min(420px, 90%); padding: 36px 28px; border-radius: 28px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 30px 80px rgba(0,0,0,0.5); }
-        .game-over-card h2 { margin: 0 0 8px; font-size: 40px; font-weight: 900; letter-spacing: -0.03em; background: linear-gradient(135deg, #ff477e, #ffab00); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .game-over-card h2 { margin: 0 0 8px; font-size: 40px; font-weight: 900; letter-spacing: -0.03em; background: linear-gradient(135deg, #ffffff, #9fc0ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
         .result-score { font-size: 64px; font-weight: 900; margin: 8px 0; color: #fff; text-shadow: 0 0 40px rgba(255,255,255,0.2); }
-        .game-over-stats { display: flex; justify-content: center; gap: 24px; margin: 16px 0 24px; color: #a89bb8; font-size: 14px; }
+        .game-over-stats { display: flex; justify-content: center; gap: 24px; margin: 16px 0 24px; color: #93a0bc; font-size: 14px; }
 
         /* START SCREEN */
-        .start-screen { position: absolute; inset: 0; z-index: 500; display: grid; place-items: center; background: rgba(5,2,10,0.7); backdrop-filter: blur(20px); }
+        .start-screen { position: absolute; inset: 0; z-index: 500; display: grid; place-items: center; background: rgba(5,7,13,0.7); backdrop-filter: blur(20px); }
         .start-card { text-align: center; width: min(480px, 90%); padding: 40px 32px; border-radius: 32px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); }
         .start-card h2 { margin: 0 0 12px; font-size: 36px; font-weight: 900; }
-        .start-card p { color: #a89bb8; margin-bottom: 24px; line-height: 1.6; }
+        .start-card p { color: #93a0bc; margin-bottom: 24px; line-height: 1.6; }
         .pose-preview { display: flex; justify-content: center; gap: 16px; margin: 20px 0; flex-wrap: wrap; }
         .pose-preview-item { padding: 12px 16px; border-radius: 14px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); text-align: center; }
         .pose-preview-item .icon { font-size: 28px; margin-bottom: 4px; }
-        .pose-preview-item .name { font-size: 11px; font-weight: 800; color: #c4bcd4; }
+        .pose-preview-item .name { font-size: 11px; font-weight: 800; color: #b9c4e0; }
 
         /* LEGEND */
         .legend { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
@@ -866,13 +752,18 @@ export default function PoseMiiPlus() {
         {/* HEADER */}
         <header className="topbar">
           <div className="brand">
-            <div className="logo">🧱</div>
+            <div className="logo">🔮</div>
             <div>
-              <h1>Hole in the Wall AI</h1>
-              <p>ทำท่าให้ตรงกับช่องว่างในกำแพง!</p>
+              <h1>ARCANE GATE</h1>
+              <p>ร่ายท่าให้ตรงกับประตูเวทมนตร์ ก่อนมันจะกลืนคุณเข้าไป!</p>
             </div>
           </div>
           <div className="controls">
+            {onExit && (
+              <button className="btn-secondary" onClick={onExit}>
+                ← หน้าหลัก
+              </button>
+            )}
             <button className="btn-primary" onClick={startGame} disabled={loading || running}>
               {loading ? '⏳ โหลด AI...' : running ? '🎮 เล่นอยู่' : '🎮 เริ่มเกม'}
             </button>
@@ -959,8 +850,8 @@ export default function PoseMiiPlus() {
 
             <div style={{ marginTop: 12, padding: 12, borderRadius: 12, background: 'rgba(255,255,255,0.03)', fontSize: 12, color: '#8a8098', lineHeight: 1.6 }}>
               <strong style={{ color: '#d4cde0' }}>วิธีเล่น:</strong><br />
-              กำแพงจะเคลื่อนที่เข้ามา ให้ทำท่าตรงกับช่องว่างตอนกำแพงถึงเส้น<br />
-              ทำถูก = ทะลุผ่าน + คะแนน | ทำผิด = ชน! 💥
+              ประตูเวทมนตร์จะเคลื่อนเข้ามา ให้ร่ายท่าคาถาให้ตรงกับช่องว่างตอนประตูถึงเส้นล็อก<br />
+              ร่ายถูก = ทะลุผ่าน + คะแนน | ร่ายผิด = โดนมนตร์สะท้อน! 💥
             </div>
           </aside>
 
@@ -993,6 +884,8 @@ export default function PoseMiiPlus() {
                             : '0 0 60px rgba(0,0,0,0.5), inset 0 0 40px rgba(255,255,255,0.03)',
                         } as CSSProperties}
                       >
+                        <div className="wall-spell-tag" style={{ color: info.color }}>✦ {info.spell} ✦</div>
+                        <div className="wall-rune-ring" style={{ '--wall-glow': info.glow } as CSSProperties} />
                         <div className="wall-hole" style={{ '--wall-glow': info.glow } as CSSProperties}>
                           <Silhouette pose={wall.pose} size={140} />
                         </div>
@@ -1006,10 +899,10 @@ export default function PoseMiiPlus() {
                 {/* PLAYER ZONE */}
                 <div className="player-zone">
                   <div className="player-ring">
-                    {detectedInfo?.icon || '🧍'}
+                    {detectedInfo?.icon || '🧙'}
                   </div>
                   <div className="target-hud">
-                    <small>ท่าปัจจุบัน</small>
+                    <small>คาถาที่ต้องร่าย</small>
                     <strong style={{ color: targetInfo?.color || '#fff' }}>
                       {targetInfo ? `${targetInfo.icon} ${targetInfo.label}` : 'รอ...'}
                     </strong>
@@ -1063,8 +956,8 @@ export default function PoseMiiPlus() {
                 {showStartScreen && !loading && (
                   <div className="start-screen">
                     <div className="start-card">
-                      <h2>🧱 Hole in the Wall</h2>
-                      <p>ทำท่าทางให้ตรงกับช่องว่างในกำแพงที่กำลังเข้ามา!<br />ใช้กล้องและ AI ตรวจจับท่าทางของคุณ</p>
+                      <h2>🔮 Arcane Gate</h2>
+                      <p>ประตูเวทมนตร์กำลังเคลื่อนเข้ามา! ร่ายท่าคาถาให้ตรงกับช่องว่างก่อนมันจะถึงตัวคุณ<br />ใช้กล้องและ AI ตรวจจับท่าทางของคุณแบบเรียลไทม์</p>
                       <div className="pose-preview">
                         {POSE_ORDER.map((key) => (
                           <div key={key} className="pose-preview-item">
