@@ -31,6 +31,12 @@ const GATE_FRAME =
   'M36 306L36 150A84 84 0 0 1 204 150L204 306L182 306L182 150A62 62 0 0 0 58 150L58 306Z';
 const GATE_PORTAL = 'M58 306L58 150A62 62 0 0 1 182 150L182 306Z';
 
+// MagicCircle's star sigils are the same geometry on every instance —
+// only color/spin/opacity vary by prop — so trace them once at module load
+// instead of on every render.
+const STAR_12_5 = polygram(100, 100, 66, 12, 5);
+const HEXAGRAM_TRIANGLE = polygram(100, 100, 45, 3, 1);
+
 /** Renders once per page — shared keyframes for every arcane visual. */
 export function MagicVisualStyles() {
   return (
@@ -125,13 +131,13 @@ export function MagicCircle({
       {/* {12/5} star sigil */}
       <g className="mv-spin" style={{ '--mv-dur': `${(spin * 1.9).toFixed(1)}s` } as CSSProperties}>
         <circle cx="100" cy="100" r="66" fill="none" stroke={color} strokeOpacity="0.42" strokeWidth="0.7" />
-        <path d={polygram(100, 100, 66, 12, 5)} fill="none" stroke={color} strokeOpacity="0.42" strokeWidth="0.6" strokeLinejoin="round" />
+        <path d={STAR_12_5} fill="none" stroke={color} strokeOpacity="0.42" strokeWidth="0.6" strokeLinejoin="round" />
       </g>
 
       {/* hexagram */}
       <g className="mv-spin mv-rev" style={{ '--mv-dur': `${(spin * 2.6).toFixed(1)}s` } as CSSProperties}>
-        <path d={polygram(100, 100, 45, 3, 1)} fill="none" stroke={color} strokeOpacity="0.5" strokeWidth="0.7" strokeLinejoin="round" />
-        <path d={polygram(100, 100, 45, 3, 1)} fill="none" stroke={color} strokeOpacity="0.5" strokeWidth="0.7" strokeLinejoin="round" transform="rotate(180 100 100)" />
+        <path d={HEXAGRAM_TRIANGLE} fill="none" stroke={color} strokeOpacity="0.5" strokeWidth="0.7" strokeLinejoin="round" />
+        <path d={HEXAGRAM_TRIANGLE} fill="none" stroke={color} strokeOpacity="0.5" strokeWidth="0.7" strokeLinejoin="round" transform="rotate(180 100 100)" />
       </g>
 
       <circle cx="100" cy="100" r="30" fill="none" stroke={color} strokeOpacity="0.28" strokeWidth="0.6" />

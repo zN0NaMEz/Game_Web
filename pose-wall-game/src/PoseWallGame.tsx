@@ -98,6 +98,14 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
   const labelToPoseRef = useRef<Record<string, PoseKey>>({});
   const poseToLabelRef = useRef<Partial<Record<PoseKey, string>>>({});
   const spawnTimerRef = useRef(0);
+  // Wall/particle position updates happen every RAF frame. Writing them via
+  // setState would re-render the whole tree (incl. the blurred side panel)
+  // at 60fps. Instead we mutate the DOM directly through these ref maps and
+  // only trigger a React re-render when walls/particles are actually
+  // added, removed, or change state (spawn/despawn/lock/hit/miss).
+  const wallElRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const particleElRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const wallsDirtyRef = useRef(false);
 
   // State
   const [ready, setReady] = useState(false);
@@ -148,6 +156,13 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
     setMessage('กำลังโหลด AI และเปิดกล้อง...');
 
     await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js');
+    // Force WebGL backend explicitly — without this tf.js may silently
+    // fall back to the CPU backend if WebGL init hasn't settled yet,
+    // which makes pose estimation many times slower.
+    if (window.tf) {
+      await window.tf.setBackend('webgl');
+      await window.tf.ready();
+    }
     await loadScript('https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8.3/dist/teachablemachine-pose.min.js');
 
     const tmPose = window.tmPose;
@@ -283,7 +298,7 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
 
     // Mark wall as passed
     const w = wallsRef.current.find((x) => x.id === wall.id);
-    if (w) w.state = 'passed';
+    if (w) { w.state = 'passed'; wallsDirtyRef.current = true; }
 
     window.setTimeout(() => setFlash(false), 300);
   }, [addParticles]);
@@ -298,7 +313,7 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
     addParticles(50, 50, '#ff1744', 20);
 
     const w = wallsRef.current.find((x) => x.id === wall.id);
-    if (w) w.state = 'miss';
+    if (w) { w.state = 'miss'; wallsDirtyRef.current = true; }
 
     if (livesRef.current <= 0) {
       window.setTimeout(stopGame, 600);
@@ -391,6 +406,7 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
         const lastPose = wallsRef.current[wallsRef.current.length - 1]?.pose;
         const newWall = createWall(nextWallIdRef.current++, randomPose(lastPose));
         wallsRef.current.push(newWall);
+        wallsDirtyRef.current = true;
       }
 
       // Update walls
@@ -402,6 +418,8 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
           w.opacity -= 0.03 * dt;
           if (w.opacity <= 0 || w.z > WALL_DESPAWN_Z) {
             wallList.splice(i, 1);
+            wallElRefs.current.delete(w.id);
+            wallsDirtyRef.current = true;
           }
           continue;
         }
@@ -415,6 +433,7 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
         // State transitions
         if (w.z >= WALL_LOCK_Z && w.z < WALL_LOCK_Z + 5 && w.state === 'approach') {
           w.state = 'lock';
+          wallsDirtyRef.current = true;
           currentTargetRef.current = w.pose;
           setTargetPose(w.pose);
           setMessage(`ทำท่า: ${POSES[w.pose].label}!`);
@@ -427,7 +446,30 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
 
         if (w.z > WALL_DESPAWN_Z) {
           wallList.splice(i, 1);
+          wallElRefs.current.delete(w.id);
+          wallsDirtyRef.current = true;
         }
+      }
+
+      // Only trigger a React re-render when the wall list actually changed
+      // shape (spawn/despawn/state transition) — not every frame.
+      if (wallsDirtyRef.current) {
+        wallsDirtyRef.current = false;
+        setWalls([...wallList]);
+      }
+
+      // Position/scale/opacity change every frame regardless of the above —
+      // write them straight to the DOM instead of going through React.
+      for (let i = 0; i < wallList.length; i++) {
+        const w = wallList[i];
+        const el = wallElRefs.current.get(w.id);
+        if (!el) continue;
+        const isShaking = shakeRef.current > 0 && w.state === 'miss';
+        const shakeX = isShaking ? (Math.random() - 0.5) * shakeRef.current : 0;
+        const shakeY = isShaking ? (Math.random() - 0.5) * shakeRef.current : 0;
+        el.style.transform = `translate(-50%, -50%) translateZ(${w.z * 4}px) scale(${w.scale}) translate(${shakeX}px, ${shakeY}px)`;
+        el.style.opacity = String(w.opacity);
+        el.style.zIndex = String(Math.floor(w.z));
       }
 
       // Update target to nearest lock wall
@@ -440,20 +482,30 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
         setTargetPose(null);
       }
 
-      setWalls([...wallList]);
-
-      // Particles
+      // Particles: only mount/unmount via React state; per-frame position
+      // updates are written straight to each particle's DOM node.
       const particles = particlesRef.current;
-      let changed = false;
+      let particleRemoved = false;
       for (let i = particles.length - 1; i >= 0; i--) {
-        particles[i].x += particles[i].vx * dt;
-        particles[i].y += particles[i].vy * dt;
-        particles[i].vy += 0.15 * dt; // gravity
-        particles[i].life -= 0.02 * dt;
-        if (particles[i].life <= 0) particles.splice(i, 1);
-        changed = true;
+        const p = particles[i];
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vy += 0.15 * dt; // gravity
+        p.life -= 0.02 * dt;
+        if (p.life <= 0) {
+          particles.splice(i, 1);
+          particleElRefs.current.delete(p.id);
+          particleRemoved = true;
+          continue;
+        }
+        const el = particleElRefs.current.get(p.id);
+        if (el) {
+          el.style.left = `${p.x}%`;
+          el.style.top = `${p.y}%`;
+          el.style.opacity = String(p.life);
+        }
       }
-      if (changed) setParticleTick((t) => t + 1);
+      if (particleRemoved) setParticleTick((t) => t + 1);
 
       // Shake decay
       if (shakeRef.current > 0) {
@@ -582,9 +634,8 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
         /* STATS */
         .stats { display:grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 16px; }
         .stat {
-          background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
+          background: rgba(20,24,44,0.55); border: 1px solid rgba(255,255,255,0.06);
           border-radius: 16px; padding: 12px 14px; text-align: center;
-          backdrop-filter: blur(10px);
         }
         .stat small { display:block; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #6f7aa0; margin-bottom: 4px; }
         .stat strong { font-size: 24px; font-weight: 900; letter-spacing: -0.03em; }
@@ -638,10 +689,9 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
         .wall-container { position: absolute; top: 50%; left: 50%; width: 320px; height: 420px; transform-style: preserve-3d; pointer-events: none; }
         .wall-body {
           position: absolute; inset: 0;
-          background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02));
+          background: linear-gradient(135deg, rgba(28,32,58,0.85), rgba(10,12,24,0.9));
           border: 3px solid rgba(255,255,255,0.15);
           border-radius: 24px;
-          backdrop-filter: blur(8px);
           box-shadow: 0 0 60px rgba(0,0,0,0.5), inset 0 0 40px rgba(255,255,255,0.03);
         }
         .wall-body::before {
@@ -874,6 +924,10 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
                   return (
                     <div
                       key={wall.id}
+                      ref={(el) => {
+                        if (el) wallElRefs.current.set(wall.id, el);
+                        else wallElRefs.current.delete(wall.id);
+                      }}
                       className="wall-container"
                       style={getWallTransform(wall)}
                     >
@@ -916,6 +970,10 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
                 {particlesRef.current.map((p) => (
                   <div
                     key={p.id}
+                    ref={(el) => {
+                      if (el) particleElRefs.current.set(p.id, el);
+                      else particleElRefs.current.delete(p.id);
+                    }}
                     className="particle"
                     style={{
                       left: `${p.x}%`,

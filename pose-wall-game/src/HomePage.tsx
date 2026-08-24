@@ -7,6 +7,7 @@ import {
   useSpring,
   useTransform,
 } from 'framer-motion';
+import type { MotionValue } from 'framer-motion';
 import {
   ArrowRight,
   BookOpen,
@@ -40,7 +41,7 @@ const STEPS = [
     n: '01',
     kicker: 'THE THRESHOLD',
     title: 'เตรียมพื้นที่ให้พร้อม',
-    desc: 'ยืนห่างจากกล้องประมาณ 1.5–2 เมตร ในที่ที่มีแสงสว่างเพียงพอ และมีพื้นที่โล่งพอให้ขยับแขนขาได้เต็มที่ หอคาถาต้องการที่ว่างสำหรับร่างของคุณ',
+    desc: 'ยืนห่างจากกล้องประมาณ 1.5–2 เมตร ในที่ที่มีแสงสว่างเพียงพอ และมีพื้นที่โล่งพอให้ขยับแขนขาได้เต็มที่',
     Icon: Maximize,
     color: '#7fb0ff',
   },
@@ -48,7 +49,7 @@ const STEPS = [
     n: '02',
     kicker: 'THE EYE',
     title: 'อนุญาตให้ใช้กล้อง',
-    desc: 'กดปุ่ม "เข้าสู่หอคาถา" แล้วอนุญาตให้เว็บไซต์เข้าถึงกล้องของคุณ ดวงตาแห่งเวทมนตร์จะเริ่มมองเห็นท่าทางของคุณทันที',
+    desc: 'กดปุ่ม "เข้าสู่หอคาถา" แล้วอนุญาตให้เว็บไซต์เข้าถึงกล้องของคุณ',
     Icon: Camera,
     color: '#67e8f9',
   },
@@ -64,7 +65,7 @@ const STEPS = [
     n: '04',
     kicker: 'THE CASTING',
     title: 'ร่ายท่าให้ตรงจังหวะ',
-    desc: 'เมื่อประตูเวทมนตร์เคลื่อนมาถึงเส้นล็อกกลางจอ ให้ทำท่าที่ตรงกับช่องว่างให้ทัน AI จะตรวจจับและตัดสินท่วงท่าของคุณในเสี้ยววินาที',
+    desc: 'เมื่อประตูเวทมนตร์เคลื่อนมาถึงเส้นล็อกกลางจอ ให้ทำท่าที่ตรงกับช่องว่างให้ทันที',
     Icon: WandSparkles,
     color: '#f0d9a0',
   },
@@ -99,7 +100,7 @@ const FEATURES = [
 const TIPS = [
   { Icon: Lightbulb, title: 'แสงสว่างเพียงพอ', desc: 'หลีกเลี่ยงห้องมืดหรือแสงย้อน จะช่วยให้ AI ตรวจจับท่าทางได้แม่นยำขึ้น' },
   { Icon: ImageIcon, title: 'พื้นหลังโล่ง', desc: 'เลือกพื้นหลังที่ไม่รก ลดสิ่งกีดขวางที่อาจรบกวนการตรวจจับ' },
-  { Icon: PersonStanding, title: 'เห็นทั้งตัว', desc: 'เว้นระยะห่างจากกล้องให้เห็นตั้งแต่ศีรษะถึงเข่าอย่างน้อย' },
+  { Icon: PersonStanding, title: 'เห็นทั้งตัว', desc: 'เว้นระยะห่างจากกล้องให้เห็นตั้งแต่ศีรษะถึงเท้า' },
   { Icon: Shirt, title: 'ขยับตัวสะดวก', desc: 'สวมใส่เสื้อผ้าที่เคลื่อนไหวง่าย เพื่อร่ายท่าคาถาได้เต็มที่' },
 ];
 
@@ -130,31 +131,44 @@ function Reveal({
   );
 }
 
-export default function HomePage({ onStart }: HomePageProps) {
-  const heroRef = useRef<HTMLElement | null>(null);
-  const howRef = useRef<HTMLElement | null>(null);
-
-  // Page-wide progress → the hairline bar pinned to the top of the viewport.
-  const { scrollY, scrollYProgress } = useScroll();
-  const barScale = useSpring(scrollYProgress, { stiffness: 130, damping: 30, restDelta: 0.001 });
-
+/**
+ * Owns `navSolid` itself so the scroll listener that flips it doesn't
+ * re-render the rest of the page (spells gallery, features, tips, ...).
+ */
+function Nav({ scrollY, onEnterGate }: { scrollY: MotionValue<number>; onEnterGate: () => void }) {
   const [navSolid, setNavSolid] = useState(false);
   useMotionValueEvent(scrollY, 'change', (v) => {
     const next = v > 24;
     setNavSolid((prev) => (prev === next ? prev : next));
   });
 
-  // Hero parallax: the gate sinks and swells as it leaves.
-  const { scrollYProgress: heroP } = useScroll({
-    target: heroRef,
-    offset: ['start start', 'end start'],
-  });
-  const heroGateY = useTransform(heroP, [0, 1], ['0%', '18%']);
-  const heroGateScale = useTransform(heroP, [0, 1], [1, 1.22]);
-  const heroCopyY = useTransform(heroP, [0, 1], ['0%', '-32%']);
-  const heroFade = useTransform(heroP, [0, 0.72], [1, 0]);
+  return (
+    <nav className={`hp-nav ${navSolid ? 'is-solid' : ''}`}>
+      <div className="hp-brand">
+        <Sparkles size={17} strokeWidth={1.5} />
+        Arcane Gate
+      </div>
+      <div className="hp-navlinks">
+        <a href="#how-to-play">วิธีเล่น</a>
+        <a href="#spells">คาถาทั้ง 4</a>
+        <a href="#features">เกี่ยวกับเกม</a>
+      </div>
+      <button className="hp-btn hp-btn-ghost" onClick={onEnterGate}>
+        เข้าสู่หอคาถา
+        <ArrowRight size={15} strokeWidth={1.6} />
+      </button>
+    </nav>
+  );
+}
 
-  // The pinned "how to play" chapter — scroll scrubs the portal open.
+/**
+ * Owns `step` (and the scroll-linked target it derives from) itself so
+ * scrubbing through the 5 steps only re-renders this pinned chapter, not
+ * the whole page.
+ */
+function HowToPlaySection() {
+  const howRef = useRef<HTMLElement | null>(null);
+
   const { scrollYProgress: howP } = useScroll({
     target: howRef,
     offset: ['start start', 'end end'],
@@ -177,6 +191,116 @@ export default function HomePage({ onStart }: HomePageProps) {
     const travel = el.offsetHeight - window.innerHeight;
     window.scrollTo({ top: top + travel * ((i + 0.5) / STEPS.length), behavior: 'smooth' });
   }, []);
+
+  return (
+    <section
+      className="hp-how"
+      id="how-to-play"
+      ref={howRef}
+      style={{ height: `${STEPS.length * CHAPTER_VH}vh` }}
+    >
+      <div className="hp-stage">
+        <motion.div className="hp-stage-art" style={{ scale: stageScale, rotate: stageSpin }}>
+          <div
+            className="hp-stage-halo"
+            style={{ background: `radial-gradient(circle, ${active.color}38, transparent 68%)` }}
+          />
+          <MagicCircle className="hp-stage-circle" size="min(88vmin, 720px)" color={active.color} spin={66} opacity={0.4} />
+          <MagicCircle className="hp-stage-circle" size="min(52vmin, 430px)" color={active.color} spin={44} opacity={0.28} runes={false} />
+        </motion.div>
+
+        <div className="hp-stage-art">
+          <MagicGate
+            className="hp-stage-gate"
+            width="min(40vmin, 330px)"
+            color={active.color}
+            intensity={0.34 + (step / (STEPS.length - 1)) * 0.66}
+          />
+        </div>
+
+        <div className="hp-stage-veil" />
+
+        <div className="hp-ghost-num">{active.n}</div>
+
+        <div className="hp-stage-inner">
+          <div className="hp-stage-head">
+            <div className="hp-kicker is-th">
+              วิธีเล่น <span className="hp-kicker-en">How to Play</span>
+            </div>
+            <div className="hp-stage-count">
+              <b>{active.n}</b> / {String(STEPS.length).padStart(2, '0')}
+            </div>
+          </div>
+
+          {/* Steps are stacked and cross-faded by index rather than mounted /
+              unmounted, so fast scrolling never queues up exit animations. */}
+          <div className="hp-copywrap">
+            {STEPS.map((s, i) => {
+              const isActive = i === step;
+              return (
+                <motion.div
+                  key={s.n}
+                  className="hp-copy"
+                  initial={false}
+                  animate={
+                    isActive
+                      ? { opacity: 1, y: 0, filter: 'blur(0px)' }
+                      : { opacity: 0, y: i < step ? -26 : 26, filter: 'blur(8px)' }
+                  }
+                  transition={{ duration: 0.5, ease: EASE }}
+                  style={{ pointerEvents: isActive ? 'auto' : 'none' }}
+                  aria-hidden={!isActive}
+                >
+                  <div className="hp-copy-icon" style={{ color: s.color }}>
+                    <s.Icon size={20} strokeWidth={1.5} />
+                  </div>
+                  <div className="hp-copy-kicker" style={{ color: s.color }}>
+                    {s.n} — {s.kicker}
+                  </div>
+                  <h3 className="hp-copy-title">{s.title}</h3>
+                  <p className="hp-copy-desc">{s.desc}</p>
+                </motion.div>
+              );
+            })}
+          </div>
+
+          <div className="hp-rail">
+            <div className="hp-rail-track" />
+            <motion.div className="hp-rail-fill" style={{ height: railFill }} />
+            {STEPS.map((s, i) => (
+              <button
+                key={s.n}
+                className={`hp-rail-item ${i === step ? 'is-active' : ''}`}
+                onClick={() => goToStep(i)}
+                aria-label={`ไปยังขั้นตอน ${s.n}: ${s.title}`}
+              >
+                <span className="hp-rail-dot" />
+                <span>{s.n}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export default function HomePage({ onStart }: HomePageProps) {
+  const heroRef = useRef<HTMLElement | null>(null);
+
+  // Page-wide progress → the hairline bar pinned to the top of the viewport.
+  const { scrollY, scrollYProgress } = useScroll();
+  const barScale = useSpring(scrollYProgress, { stiffness: 130, damping: 30, restDelta: 0.001 });
+
+  // Hero parallax: the gate sinks and swells as it leaves.
+  const { scrollYProgress: heroP } = useScroll({
+    target: heroRef,
+    offset: ['start start', 'end start'],
+  });
+  const heroGateY = useTransform(heroP, [0, 1], ['0%', '18%']);
+  const heroGateScale = useTransform(heroP, [0, 1], [1, 1.22]);
+  const heroCopyY = useTransform(heroP, [0, 1], ['0%', '-32%']);
+  const heroFade = useTransform(heroP, [0, 0.72], [1, 0]);
 
   const enterGate = useCallback(() => {
     const colors = ['#7fb0ff', '#a78bfa', '#ffffff', '#f0d9a0'];
@@ -537,22 +661,7 @@ export default function HomePage({ onStart }: HomePageProps) {
 
       <motion.div className="hp-progress" style={{ scaleX: barScale }} />
 
-      {/* ---------- NAV ---------- */}
-      <nav className={`hp-nav ${navSolid ? 'is-solid' : ''}`}>
-        <div className="hp-brand">
-          <Sparkles size={17} strokeWidth={1.5} />
-          Arcane Gate
-        </div>
-        <div className="hp-navlinks">
-          <a href="#how-to-play">วิธีเล่น</a>
-          <a href="#spells">คาถาทั้ง 4</a>
-          <a href="#features">เกี่ยวกับเกม</a>
-        </div>
-        <button className="hp-btn hp-btn-ghost" onClick={enterGate}>
-          เข้าสู่หอคาถา
-          <ArrowRight size={15} strokeWidth={1.6} />
-        </button>
-      </nav>
+      <Nav scrollY={scrollY} onEnterGate={enterGate} />
 
       {/* ---------- HERO ---------- */}
       <section className="hp-hero" ref={heroRef}>
@@ -653,96 +762,7 @@ export default function HomePage({ onStart }: HomePageProps) {
         </div>
       </section>
 
-      {/* ---------- PINNED: HOW TO PLAY ---------- */}
-      <section
-        className="hp-how"
-        id="how-to-play"
-        ref={howRef}
-        style={{ height: `${STEPS.length * CHAPTER_VH}vh` }}
-      >
-        <div className="hp-stage">
-          <motion.div className="hp-stage-art" style={{ scale: stageScale, rotate: stageSpin }}>
-            <div
-              className="hp-stage-halo"
-              style={{ background: `radial-gradient(circle, ${active.color}38, transparent 68%)` }}
-            />
-            <MagicCircle className="hp-stage-circle" size="min(88vmin, 720px)" color={active.color} spin={66} opacity={0.4} />
-            <MagicCircle className="hp-stage-circle" size="min(52vmin, 430px)" color={active.color} spin={44} opacity={0.28} runes={false} />
-          </motion.div>
-
-          <div className="hp-stage-art">
-            <MagicGate
-              className="hp-stage-gate"
-              width="min(40vmin, 330px)"
-              color={active.color}
-              intensity={0.34 + (step / (STEPS.length - 1)) * 0.66}
-            />
-          </div>
-
-          <div className="hp-stage-veil" />
-
-          <div className="hp-ghost-num">{active.n}</div>
-
-          <div className="hp-stage-inner">
-            <div className="hp-stage-head">
-              <div className="hp-kicker is-th">
-                วิธีเล่น <span className="hp-kicker-en">How to Play</span>
-              </div>
-              <div className="hp-stage-count">
-                <b>{active.n}</b> / {String(STEPS.length).padStart(2, '0')}
-              </div>
-            </div>
-
-            {/* Steps are stacked and cross-faded by index rather than mounted /
-                unmounted, so fast scrolling never queues up exit animations. */}
-            <div className="hp-copywrap">
-              {STEPS.map((s, i) => {
-                const isActive = i === step;
-                return (
-                  <motion.div
-                    key={s.n}
-                    className="hp-copy"
-                    initial={false}
-                    animate={
-                      isActive
-                        ? { opacity: 1, y: 0, filter: 'blur(0px)' }
-                        : { opacity: 0, y: i < step ? -26 : 26, filter: 'blur(8px)' }
-                    }
-                    transition={{ duration: 0.5, ease: EASE }}
-                    style={{ pointerEvents: isActive ? 'auto' : 'none' }}
-                    aria-hidden={!isActive}
-                  >
-                    <div className="hp-copy-icon" style={{ color: s.color }}>
-                      <s.Icon size={20} strokeWidth={1.5} />
-                    </div>
-                    <div className="hp-copy-kicker" style={{ color: s.color }}>
-                      {s.n} — {s.kicker}
-                    </div>
-                    <h3 className="hp-copy-title">{s.title}</h3>
-                    <p className="hp-copy-desc">{s.desc}</p>
-                  </motion.div>
-                );
-              })}
-            </div>
-
-            <div className="hp-rail">
-              <div className="hp-rail-track" />
-              <motion.div className="hp-rail-fill" style={{ height: railFill }} />
-              {STEPS.map((s, i) => (
-                <button
-                  key={s.n}
-                  className={`hp-rail-item ${i === step ? 'is-active' : ''}`}
-                  onClick={() => goToStep(i)}
-                  aria-label={`ไปยังขั้นตอน ${s.n}: ${s.title}`}
-                >
-                  <span className="hp-rail-dot" />
-                  <span>{s.n}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </section>
+      <HowToPlaySection />
 
       {/* ---------- SPELLS ---------- */}
       <section className="hp-section" id="spells">
@@ -857,7 +877,7 @@ export default function HomePage({ onStart }: HomePageProps) {
           </Reveal>
           <Reveal delay={0.16}>
             <p className="hp-lead" style={{ textAlign: 'center' }}>
-              เปิดกล้อง ยืนให้พร้อม แล้วก้าวข้ามธรณีประตูเพื่อพิสูจน์ฝีมือจอมเวทย์ของคุณ
+              เปิดกล้อง ยืนให้พร้อม แล้วก้าวข้ามอุปสรรคเพื่อพิสูจน์ฝีมือจอมเวทย์ของคุณ
             </p>
           </Reveal>
           <Reveal delay={0.24}>
@@ -871,7 +891,6 @@ export default function HomePage({ onStart }: HomePageProps) {
 
       <footer className="hp-footer">
         <span>ARCANE GATE</span>
-        <span>TEACHABLE MACHINE × TENSORFLOW.JS</span>
       </footer>
     </div>
   );
