@@ -81,6 +81,10 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
   const modelRef = useRef<any>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const predictionBusyRef = useRef(false);
+  // Latest pose skeleton from the AI prediction loop (~10/sec). The camera
+  // render loop below redraws it every frame alongside the fresh webcam
+  // image so the overlay doesn't vanish between prediction ticks.
+  const lastPoseRef = useRef<any>(null);
   const wallsRef = useRef<Wall[]>([]);
   const nextWallIdRef = useRef(1);
   const scoreRef = useRef(0);
@@ -331,21 +335,12 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
 
     predictionBusyRef.current = true;
     try {
-      webcam.update();
-      const canvas = canvasRef.current;
-      const ctx = canvas?.getContext('2d');
-      if (ctx) {
-        ctx.clearRect(0, 0, CAMERA_SIZE, CAMERA_SIZE);
-        ctx.drawImage(webcam.canvas, 0, 0);
-      }
-
+      // The camera render loop (below) already keeps webcam.canvas fresh at
+      // 60fps and redraws the skeleton every frame — this loop only needs
+      // to run the (expensive) AI inference and hand back the result.
       const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
       const predictions = await model.predict(posenetOutput);
-
-      if (ctx && pose) {
-        window.tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
-        window.tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
-      }
+      lastPoseRef.current = pose ?? null;
 
       if (!predictions?.length) return;
 
@@ -535,6 +530,38 @@ export default function PoseWallGame({ onExit }: PoseWallGameProps) {
     timer = window.setTimeout(run, 50);
     return () => { active = false; window.clearTimeout(timer); };
   }, [predictPose, running]);
+
+  // ==========================================
+  // CAMERA RENDER LOOP
+  // Deliberately separate from the prediction loop above. AI inference only
+  // runs ~10x/sec (it's expensive), but the visible camera feed used to be
+  // redrawn only inside that same tick — capping it at ~10fps and making it
+  // look choppy next to the 60fps wall animation. This loop redraws the
+  // webcam image (+ last known skeleton) every frame regardless of how
+  // often/slowly prediction completes, so the feed itself stays smooth.
+  // ==========================================
+  useEffect(() => {
+    if (!ready) return undefined;
+    let raf = 0;
+    const draw = () => {
+      const webcam = webcamRef.current;
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext('2d');
+      if (webcam && ctx) {
+        webcam.update();
+        ctx.clearRect(0, 0, CAMERA_SIZE, CAMERA_SIZE);
+        ctx.drawImage(webcam.canvas, 0, 0);
+        const pose = lastPoseRef.current;
+        if (pose) {
+          window.tmPose.drawKeypoints(pose.keypoints, 0.5, ctx);
+          window.tmPose.drawSkeleton(pose.keypoints, 0.5, ctx);
+        }
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [ready]);
 
   // ==========================================
   // CLEANUP
